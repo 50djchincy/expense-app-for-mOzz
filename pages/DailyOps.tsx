@@ -387,16 +387,87 @@ export const DailyOps: React.FC = () => {
       </div>
 
       {currentShift?.status !== 'OPEN' ? (
-        <div className="glass rounded-[2.5rem] p-12 text-center space-y-8 border border-white/10 shadow-2xl relative overflow-hidden">
+        <div className="glass rounded-[2.5rem] p-8 md:p-12 text-center space-y-8 border border-white/10 shadow-2xl relative overflow-hidden">
           <div className="absolute top-0 left-0 right-0 h-1 gradient-purple" />
-          <div className="w-24 h-24 rounded-full gradient-purple mx-auto flex items-center justify-center shadow-xl mb-6">
-            <Sun size={48} className="text-white" />
+          
+          {/* 1. Header & Context */}
+          <div className="space-y-2">
+            <div className="w-20 h-20 rounded-full gradient-purple mx-auto flex items-center justify-center shadow-xl mb-4">
+              <Sun size={40} className="text-white" />
+            </div>
+            <h2 className="text-3xl font-outfit font-bold text-white">Initialize New Register</h2>
+            <p className="text-slate-400">Verify funds before opening operations.</p>
           </div>
-          <h2 className="text-3xl font-outfit font-bold text-white">Initialize New Register</h2>
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <button onClick={() => setShowTopUpModal(true)} disabled={actionLoading} className="w-full sm:w-auto px-8 py-4 bg-white/5 hover:bg-white/10 text-white rounded-2xl font-bold transition-all border border-white/10 text-sm">Top Up Float</button>
-            <button onClick={handleOpenShift} disabled={actionLoading} className="w-full sm:w-auto px-12 py-4 gradient-purple text-white rounded-2xl font-bold shadow-lg shadow-purple-500/20 active:scale-95 flex items-center gap-2 text-sm">
-              {actionLoading ? <Loader2 className="animate-spin" size={20} /> : <Sun size={20} />} Open Register
+
+          {/* 2. The Verification Card */}
+          <div className="max-w-xl mx-auto bg-slate-900/50 rounded-2xl border border-white/5 p-6 space-y-4">
+             {/* Row 1: Carry Forward (Last Shift) */}
+             <div className="flex items-center justify-between border-b border-white/5 pb-4">
+                <div className="text-left">
+                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Carried Forward</p>
+                   <p className="text-xs text-slate-400 mt-1">
+                     Closed by {currentShift?.closedBy || 'Unknown'} <br/>
+                     {currentShift?.closedAt ? new Date(currentShift.closedAt).toLocaleDateString() : '-'}
+                   </p>
+                </div>
+                <div className="text-right">
+                   <p className="text-2xl font-black text-white tracking-tighter">
+                     ${(currentShift?.actualCash || 0).toLocaleString()}
+                   </p>
+                </div>
+             </div>
+
+             {/* Row 2: Current System Balance */}
+             <div className="flex items-center justify-between pt-2">
+                <div className="text-left flex items-center gap-2">
+                   <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
+                     <Wallet size={16} />
+                   </div>
+                   <div>
+                     <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Current In Safe</p>
+                     <p className="text-[10px] text-slate-500 font-bold">System Record (Till Float)</p>
+                   </div>
+                </div>
+                <div className="text-right">
+                   <p className="text-3xl font-black text-emerald-400 tracking-tighter">
+                     ${(accounts.find(a => a.id === 'till_float')?.balance || 0).toLocaleString()}
+                   </p>
+                </div>
+             </div>
+
+             {/* 3. Ghost Movement Warning */}
+             {(accounts.find(a => a.id === 'till_float')?.balance || 0) !== (currentShift?.actualCash || 0) && (
+               <div className="flex items-start gap-3 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl text-left">
+                  <AlertCircle size={20} className="text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-bold text-amber-400">Balance Mismatch</p>
+                    <p className="text-xs text-amber-200/80 leading-relaxed mt-1">
+                       The float has changed since the last close (Diff: ${(
+                         (accounts.find(a => a.id === 'till_float')?.balance || 0) - (currentShift?.actualCash || 0)
+                       ).toLocaleString()}). Money may have been moved while closed.
+                    </p>
+                  </div>
+               </div>
+             )}
+          </div>
+
+          {/* 4. Action Buttons */}
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
+            <button 
+              onClick={() => setShowTopUpModal(true)} 
+              disabled={actionLoading} 
+              className="w-full sm:w-auto px-8 py-4 bg-white/5 hover:bg-white/10 text-white rounded-2xl font-bold transition-all border border-white/10 text-sm flex items-center justify-center gap-2"
+            >
+               <ArrowUpCircle size={18} className="text-emerald-400" />
+               Inject Cash (Top Up)
+            </button>
+            <button 
+              onClick={handleOpenShift} 
+              disabled={actionLoading} 
+              className="w-full sm:w-auto px-12 py-4 gradient-purple text-white rounded-2xl font-bold shadow-lg shadow-purple-500/20 active:scale-95 flex items-center justify-center gap-2 text-sm"
+            >
+              {actionLoading ? <Loader2 className="animate-spin" size={20} /> : <Sun size={20} />} 
+              Confirm & Open Register
             </button>
           </div>
         </div>
