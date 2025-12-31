@@ -1,0 +1,7 @@
+{
+  "name": "Mozzarella Expenses",
+  "description": "High-end restaurant operations management platform for tracking expenses and daily logs with a premium dark-mode aesthetic.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
