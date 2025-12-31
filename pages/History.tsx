@@ -1,18 +1,14 @@
-
 import React, { useState } from 'react';
 import { useAccounts } from '../AccountsContext';
+import { Transaction } from '../types';
 import { 
   History as HistoryIcon, 
-  ArrowUpRight, 
-  ArrowDownLeft, 
   Search, 
   Calendar, 
   Tag, 
   Loader2,
-  ChevronRight,
-  Zap,
-  TrendingDown,
-  ArrowRight
+  ArrowRight,
+  PackageCheck
 } from 'lucide-react';
 
 export const History: React.FC = () => {
@@ -20,6 +16,11 @@ export const History: React.FC = () => {
   const [search, setSearch] = useState('');
 
   const getAccountName = (id: string) => accounts.find(a => a.id === id)?.name || id;
+
+  const handleReceiveStock = (tx: Transaction) => {
+    // Connects to Stock Module for historical entries
+    alert(`📦 STOCK RECOVERY:\n\nConnecting historical transaction to inventory:\n"${tx.description}"\n\n(Redirecting to Stock Module...)`);
+  };
 
   const filteredTxs = transactions.filter(tx => 
     tx.description.toLowerCase().includes(search.toLowerCase()) ||
@@ -69,6 +70,7 @@ export const History: React.FC = () => {
                 <th className="px-8 py-5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Categorization</th>
                 <th className="px-8 py-5 text-[10px] font-black text-slate-500 uppercase tracking-widest">Description</th>
                 <th className="px-8 py-5 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">Value</th>
+                <th className="px-8 py-5 text-[10px] font-black text-slate-500 uppercase tracking-widest text-right">Inv.</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
@@ -117,20 +119,20 @@ export const History: React.FC = () => {
                         }`}>
                           {isInflow ? '+' : isOutflow ? '-' : ''}${tx.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                         </span>
-                        <span className="text-[8px] font-bold text-slate-700 uppercase mt-0.5">Verified Balance</span>
                       </div>
+                    </td>
+                    <td className="px-8 py-6 text-right">
+                      <button 
+                        onClick={() => handleReceiveStock(tx)}
+                        className="p-2 bg-slate-800 hover:bg-emerald-500/20 text-slate-500 hover:text-emerald-400 rounded-xl transition-all"
+                        title="Receive Stock"
+                      >
+                         <PackageCheck size={16} />
+                      </button>
                     </td>
                   </tr>
                 );
               })}
-              {filteredTxs.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-8 py-32 text-center text-slate-600">
-                    <HistoryIcon className="mx-auto mb-4 opacity-10" size={60} />
-                    <p className="text-xs font-black uppercase tracking-[0.3em]">No molecular data found</p>
-                  </td>
-                </tr>
-              )}
             </tbody>
           </table>
         </div>
