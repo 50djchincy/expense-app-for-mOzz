@@ -8,30 +8,24 @@ import {
   addDoc, 
   doc, 
   deleteDoc, 
-  query, 
-  where,
-  limit,
-  orderBy,
   updateDoc
 } from 'firebase/firestore';
 import { 
   Receipt, 
   Star, 
   Trash2, 
-  CheckCircle2, 
   AlertCircle,
   Loader2,
   X,
   Zap,
   PackageCheck,
-  RefreshCcw,
   Users,
-  CalendarClock
+  CalendarClock,
+  FileText
 } from 'lucide-react';
 import { Transaction, ExpenseTemplate, RecurringExpense, Contact } from '../types';
 
 export const Expenses: React.FC = () => {
-  // 1. Get 'transactions' from the global context (Just like Money Lab)
   const { accounts, transferFunds, transactions } = useAccounts();
   
   // Tabs
@@ -39,10 +33,17 @@ export const Expenses: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   
-  // Data State (We only need State for things NOT in the global context)
+  // Data State
   const [recurring, setRecurring] = useState<RecurringExpense[]>([]);
   const [templates, setTemplates] = useState<ExpenseTemplate[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
+
+  // Helper for DateTime Input (Returns YYYY-MM-DDTHH:mm for local time)
+  const getCurrentDateTime = () => {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+    return now.toISOString().slice(0, 16);
+  };
 
   // Log Form State
   const [form, setForm] = useState({
@@ -51,10 +52,12 @@ export const Expenses: React.FC = () => {
     manualDescription: '',
     category: 'Operations',
     fromAccountId: 'till_float',
+    expenseDate: getCurrentDateTime(),
+    notes: '',
     saveAsTemplate: false,
     isRecurring: false,
     receiveStock: false,
-    frequency: 'MONTHLY' as any,
+    frequency: 'MONTHLY' as 'DAILY' | 'WEEKLY' | 'MONTHLY',
     dueDateOffset: 7
   });
 
@@ -62,9 +65,7 @@ export const Expenses: React.FC = () => {
   const [settleContactId, setSettleContactId] = useState<string | null>(null);
   const [processRecurringModal, setProcessRecurringModal] = useState<RecurringExpense | null>(null);
 
-  // --- FIXED: USE MEMO INSTEAD OF FIRESTORE QUERY ---
-  
-  // 1. Pending Bills: Filter directly from global transactions (Matches Money Lab logic)
+  // Computed Data
   const pendingBills = useMemo(() => {
     return transactions.filter(t => 
       t.fromAccountId === 'pending_bills' && 
@@ -72,22 +73,16 @@ export const Expenses: React.FC = () => {
     );
   }, [transactions]);
 
-  // 2. Recent Expenses: Filter directly from global transactions
   const recentExpenses = useMemo(() => {
     return transactions
       .filter(t => 
-        // Exclude system transfers, Shift opens/closes
         !['Transfer', 'Shift Close', 'Shift Open', 'Internal Transfer', 'Settlement'].includes(t.category) &&
         t.amount > 0 &&
-        // Ensure we don't show Pending Bills in "Recent" until they are paid? 
-        // Or show them? Usually recent log shows everything. 
-        // Let's exclude strictly internal moves.
         t.fromAccountId !== 'pending_bills' 
       )
-      .slice(0, 50); // Take top 50
+      .slice(0, 50);
   }, [transactions]);
 
-  // Computed: Overdue Checks
   const overdueCount = useMemo(() => 
     pendingBills.filter(b => b.dueDate && Date.now() > b.dueDate).length, 
   [pendingBills]);
@@ -99,25 +94,20 @@ export const Expenses: React.FC = () => {
   useEffect(() => {
     let active = true;
 
-    // 1. Fetch Templates (Keep local fetch or move to context if desired)
     const unsubTemplates = onSnapshot(collection(db, getFullPath('expense_templates')), (snap) => {
       if (active) setTemplates(snap.docs.map(d => ({ ...d.data(), id: d.id } as ExpenseTemplate)));
     });
 
-    // 2. Fetch Recurring (Keep local fetch)
     const unsubRecurring = onSnapshot(collection(db, getFullPath('recurring_expenses')), (snap) => {
       if (active) setRecurring(snap.docs.map(d => ({ ...d.data(), id: d.id } as RecurringExpense)));
     });
 
-    // 3. Fetch Contacts
     const unsubContacts = onSnapshot(collection(db, getFullPath('contacts')), (snap) => {
       if (active) {
         setContacts(snap.docs.map(d => ({ ...d.data(), id: d.id } as Contact)));
-        setLoading(false); // Data is ready
+        setLoading(false);
       }
     });
-
-    // REMOVED: unsubPending and unsubRecent (We use global context now)
 
     return () => {
       active = false;
@@ -127,11 +117,17 @@ export const Expenses: React.FC = () => {
     };
   }, []);
 
+  // Reset Date if Till Float is selected (Enforce "Now")
+  useEffect(() => {
+    if (form.fromAccountId === 'till_float') {
+        setForm(f => ({ ...f, expenseDate: getCurrentDateTime() }));
+    }
+  }, [form.fromAccountId]);
+
   const handleStockTrigger = (desc: string, amount: number) => {
     alert(`📦 STOCK MODULE CONNECTION:\n\nCreating inventory record for:\nItem: ${desc}\nCost: $${amount}\n\n(Redirecting to Stock Reception...)`);
   };
 
-  // Helper to find contact name
   const getContactName = (id?: string) => contacts.find(c => c.id === id)?.name || 'Unknown Vendor';
 
   const handleLogExpense = async (e: React.FormEvent) => {
@@ -145,9 +141,20 @@ export const Expenses: React.FC = () => {
       const description = contact ? contact.name : form.manualDescription;
       
       const isIOU = form.fromAccountId === 'pending_bills';
-      const dueDate = isIOU ? Date.now() + (form.dueDateOffset * 24 * 60 * 60 * 1000) : undefined;
+      const isTill = form.fromAccountId === 'till_float';
 
-      // 1. Execute Transfer (or log Liability)
+      const dueDate = isIOU ? Date.now() + (form.dueDateOffset * 24 * 60 * 60 * 1000) : undefined;
+      
+      // Determine Transaction Date:
+      // If Till Float -> Always NOW (System Time).
+      // If Other -> Parse user input. Fallback to NOW if invalid/empty.
+      let txDate = Date.now();
+      if (!isTill && form.expenseDate) {
+          const parsed = new Date(form.expenseDate).getTime();
+          if (!isNaN(parsed)) txDate = parsed;
+      }
+
+      // 1. Execute Transfer
       await transferFunds(
         form.fromAccountId,
         'operational_expenses',
@@ -156,8 +163,10 @@ export const Expenses: React.FC = () => {
         form.category,
         {
           contactId: form.contactId,
-          isSettled: !isIOU, // If pending, it's NOT settled
-          dueDate: dueDate
+          isSettled: !isIOU,
+          dueDate: dueDate,
+          date: txDate, // Explicitly override the date
+          notes: form.notes
         }
       );
 
@@ -172,18 +181,18 @@ export const Expenses: React.FC = () => {
         });
       }
 
-      // 3. Create Recurring Reminder (Not auto-deduct)
+      // 3. Create Recurring Reminder
       if (form.isRecurring) {
         await addDoc(collection(db, getFullPath('recurring_expenses')), {
           name: description,
-          amount: amountNum, // Default amount
+          amount: amountNum,
           frequency: form.frequency,
           fromAccountId: form.fromAccountId,
           category: form.category,
           description: description,
           contactId: form.contactId || null,
           isActive: true,
-          nextDueDate: Date.now() + (30 * 24 * 60 * 60 * 1000) // Default next month
+          nextDueDate: Date.now() + (30 * 24 * 60 * 60 * 1000)
         });
       }
 
@@ -200,9 +209,12 @@ export const Expenses: React.FC = () => {
         amount: '',
         contactId: '',
         manualDescription: '',
+        notes: '',
         receiveStock: false,
         saveAsTemplate: false,
-        isRecurring: false
+        isRecurring: false,
+        frequency: 'MONTHLY',
+        expenseDate: getCurrentDateTime()
       });
     } catch (err: any) {
       alert(err.message);
@@ -220,7 +232,6 @@ export const Expenses: React.FC = () => {
     
     setActionLoading(true);
     try {
-      // 1. Pay
       await transferFunds(
         processRecurringModal.fromAccountId,
         'operational_expenses',
@@ -230,10 +241,10 @@ export const Expenses: React.FC = () => {
         { contactId: processRecurringModal.contactId }
       );
 
-      // 2. Update Next Due Date
       const nextDate = new Date();
       if (processRecurringModal.frequency === 'MONTHLY') nextDate.setMonth(nextDate.getMonth() + 1);
       if (processRecurringModal.frequency === 'WEEKLY') nextDate.setDate(nextDate.getDate() + 7);
+      if (processRecurringModal.frequency === 'DAILY') nextDate.setDate(nextDate.getDate() + 1);
       
       await updateDoc(doc(db, getFullPath('recurring_expenses'), processRecurringModal.id), {
         nextDueDate: nextDate.getTime()
@@ -258,16 +269,14 @@ export const Expenses: React.FC = () => {
     
     setActionLoading(true);
     try {
-      // Settle each bill
       for (const bill of billsToSettle) {
         await transferFunds(
           source,
-          'pending_bills', // Moving money OUT of pending (liability reduction)
+          'pending_bills',
           bill.amount,
           `Settlement: ${bill.description}`,
           'Debt Settlement'
         );
-        // Mark original as settled
         await updateDoc(doc(db, getFullPath('transactions'), bill.id), { isSettled: true });
       }
       setSettleContactId(null);
@@ -297,7 +306,6 @@ export const Expenses: React.FC = () => {
 
   if (loading) return <div className="flex justify-center items-center py-20"><Loader2 className="animate-spin text-purple-400" size={40} /></div>;
 
-  // Group Pending Bills by Contact
   const groupedPending = pendingBills.reduce((acc, bill) => {
     const key = bill.contactId || 'unknown';
     if (!acc[key]) acc[key] = { name: getContactName(bill.contactId), amount: 0, count: 0, bills: [] };
@@ -356,6 +364,7 @@ export const Expenses: React.FC = () => {
 
               <div className="glass rounded-[2.5rem] p-8 border border-white/10 shadow-2xl">
                 <form onSubmit={handleLogExpense} className="space-y-6">
+                  {/* Row 1: Source & Date */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-2">
                       <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Payment Source</label>
@@ -366,12 +375,45 @@ export const Expenses: React.FC = () => {
                         <option value="pending_bills">Payment Pending (I.O.U)</option>
                       </select>
                     </div>
+                    
+                    <div className="space-y-2">
+                       <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Date & Time</label>
+                       <div className="relative group">
+                          <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-purple-400 pointer-events-none">
+                             <CalendarClock size={16} />
+                          </div>
+                          <input 
+                            type="datetime-local" 
+                            value={form.expenseDate}
+                            // Disabled if Till Float to prevent backdating register ops
+                            disabled={form.fromAccountId === 'till_float'}
+                            onChange={(e) => setForm({...form, expenseDate: e.target.value})}
+                            className={`w-full bg-slate-900 border border-white/5 rounded-2xl pl-12 pr-4 py-3 text-white focus:ring-2 focus:ring-purple-500/50 outline-none ${form.fromAccountId === 'till_float' ? 'opacity-50 cursor-not-allowed' : ''}`} 
+                          />
+                       </div>
+                    </div>
+                  </div>
+                  
+                  {/* Row 2: Amount & Category */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-2">
                       <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Amount</label>
                       <div className="relative">
                         <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">$</span>
                         <input type="number" step="0.01" required value={form.amount} onChange={(e) => setForm({...form, amount: e.target.value})} placeholder="0.00" className="w-full bg-slate-900 border border-white/5 rounded-2xl pl-10 pr-4 py-3 text-2xl font-bold text-white focus:ring-2 focus:ring-purple-500/50 outline-none" />
                       </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Category</label>
+                      <select value={form.category} onChange={(e) => setForm({...form, category: e.target.value})} className="w-full bg-slate-900 border border-white/5 rounded-2xl px-4 py-3 text-white focus:ring-2 focus:ring-purple-500/50 outline-none">
+                        <option>Operations</option>
+                        <option>Supplies</option>
+                        <option>Stock/Inventory</option>
+                        <option>Staff Lunch</option>
+                        <option>Utility</option>
+                        <option>Repair</option>
+                        <option>Marketing</option>
+                      </select>
                     </div>
                   </div>
 
@@ -386,43 +428,60 @@ export const Expenses: React.FC = () => {
                             </select>
                         </div>
                     </div>
-                    {/* Fallback for one-off vendors */}
                     {!form.contactId && (
                         <input value={form.manualDescription} onChange={(e) => setForm({...form, manualDescription: e.target.value})} placeholder="Or type One-Off Vendor Name..." className="w-full bg-slate-900/50 border border-white/5 rounded-xl px-4 py-2 text-sm text-white focus:ring-1 focus:ring-purple-500/50 outline-none mt-2" />
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Category</label>
-                      <select value={form.category} onChange={(e) => setForm({...form, category: e.target.value})} className="w-full bg-slate-900 border border-white/5 rounded-2xl px-4 py-3 text-white focus:ring-2 focus:ring-purple-500/50 outline-none">
-                        <option>Operations</option>
-                        <option>Supplies</option>
-                        <option>Stock/Inventory</option>
-                        <option>Staff Lunch</option>
-                        <option>Utility</option>
-                        <option>Repair</option>
-                        <option>Marketing</option>
-                      </select>
-                    </div>
-                    
-                    <div className="flex flex-col justify-center gap-3 pl-2">
+                  {/* Notes Section */}
+                  <div className="space-y-2">
+                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Notes / Comments</label>
+                     <div className="relative">
+                        <textarea 
+                           value={form.notes} 
+                           onChange={(e) => setForm({...form, notes: e.target.value})} 
+                           placeholder="Add extra details about this expense..." 
+                           className="w-full bg-slate-900 border border-white/5 rounded-2xl pl-10 pr-4 py-3 text-sm text-white focus:ring-2 focus:ring-purple-500/50 outline-none min-h-[80px]" 
+                        />
+                        <div className="absolute left-4 top-4 text-slate-500">
+                           <FileText size={16} />
+                        </div>
+                     </div>
+                  </div>
+
+                  {/* Options & Checkboxes */}
+                  <div className="flex flex-col gap-3 pl-2">
                        <label className="flex items-center gap-3 cursor-pointer group">
                           <input type="checkbox" checked={form.receiveStock} onChange={(e) => setForm({...form, receiveStock: e.target.checked})} className="w-5 h-5 rounded-lg border-emerald-500/50 bg-emerald-500/10 text-emerald-500 focus:ring-0 focus:ring-offset-0 transition-all" />
                           <span className="text-sm text-emerald-400 font-bold group-hover:text-emerald-300 transition-colors flex items-center gap-2"><PackageCheck size={16} /> Receive into Inventory</span>
                        </label>
-                       {/* Only show 'Save Template' if not IOU */}
+                       
                        {form.fromAccountId !== 'pending_bills' && (
                          <label className="flex items-center gap-3 cursor-pointer group">
                             <input type="checkbox" checked={form.saveAsTemplate} onChange={(e) => setForm({...form, saveAsTemplate: e.target.checked})} className="w-5 h-5 rounded-lg border-white/10 bg-slate-900 text-purple-500 focus:ring-0 focus:ring-offset-0 transition-all" />
                             <span className="text-xs text-slate-400 group-hover:text-white transition-colors">Save as Template</span>
                          </label>
                        )}
+                       
                        <label className="flex items-center gap-3 cursor-pointer group">
                           <input type="checkbox" checked={form.isRecurring} onChange={(e) => setForm({...form, isRecurring: e.target.checked})} className="w-5 h-5 rounded-lg border-white/10 bg-slate-900 text-purple-500 focus:ring-0 focus:ring-offset-0 transition-all" />
                           <span className="text-xs text-slate-400 group-hover:text-white transition-colors">Create Reminder</span>
                        </label>
-                    </div>
+
+                       {/* Frequency Selector */}
+                       {form.isRecurring && (
+                         <div className="pl-8 animate-in slide-in-from-top-2">
+                            <select 
+                               value={form.frequency} 
+                               onChange={(e) => setForm({...form, frequency: e.target.value as any})}
+                               className="bg-slate-900 border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:ring-1 focus:ring-purple-500/50 outline-none w-full"
+                            >
+                               <option value="WEEKLY">Weekly</option>
+                               <option value="MONTHLY">Monthly</option>
+                               <option value="DAILY">Daily</option>
+                            </select>
+                         </div>
+                       )}
                   </div>
 
                   {form.fromAccountId === 'pending_bills' && (
@@ -476,10 +535,15 @@ export const Expenses: React.FC = () => {
                   <tbody className="divide-y divide-white/5">
                     {recentExpenses.map(tx => (
                       <tr key={tx.id} className="hover:bg-white/5 transition-colors group">
-                        <td className="px-8 py-5 text-xs text-slate-400">{new Date(tx.date).toLocaleDateString()}</td>
+                        <td className="px-8 py-5 text-xs text-slate-400">
+                          {/* UPDATED: Shows Date AND Time */}
+                          {new Date(tx.date).toLocaleDateString()}
+                          <span className="block text-[10px] text-slate-500">{new Date(tx.date).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit' })}</span>
+                        </td>
                         <td className="px-8 py-5">
                           <p className="text-sm font-bold text-white">{tx.description}</p>
                           <span className="text-[10px] text-slate-500 uppercase">{tx.category}</span>
+                          {tx.notes && <p className="text-[10px] text-slate-500 italic mt-1">Note: {tx.notes}</p>}
                         </td>
                         <td className="px-8 py-5">
                           <span className="text-sm font-bold text-rose-400">${tx.amount.toLocaleString()}</span>
@@ -498,6 +562,7 @@ export const Expenses: React.FC = () => {
           </div>
         )}
 
+        {/* Other Tabs (Pending/Recurring) unchanged */}
         {activeTab === 'pending' && (
           <div className="lg:col-span-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
