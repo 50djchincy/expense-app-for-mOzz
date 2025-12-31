@@ -51,6 +51,9 @@ export const Dashboard: React.FC = () => {
   const hikingBarDebt = accounts.find(a => a.id === 'hiking_bar_rec')?.balance || 0;
   const pendingBillsTotal = accounts.find(a => a.id === 'pending_bills')?.balance || 0;
   
+  // [NEW]: Calculate Total Spent (Operational Expenses)
+  const totalSpent = accounts.find(a => a.id === 'operational_expenses')?.balance || 0;
+  
   const totalAssets = accounts
     .filter(a => a.type === 'ASSET' || a.type === 'RECEIVABLE')
     .reduce((sum, a) => sum + a.balance, 0);
@@ -251,13 +254,15 @@ export const Dashboard: React.FC = () => {
           color="rose"
           onClick={() => navigate('/expenses')}
         />
+        
+        {/* [CHANGE]: Replaced Net Liquidity with Total Spent */}
         <DashboardStatCard 
-          title="Net Liquidity" 
-          value={`$${netLiquidity.toLocaleString()}`} 
-          subtitle="Master Vault Capacity"
-          icon={Zap}
-          color="purple"
-          onClick={() => navigate('/money-lab')}
+          title="Total Spent" 
+          value={`$${totalSpent.toLocaleString()}`} 
+          subtitle="Operational Costs"
+          icon={TrendingDown} 
+          color="rose" 
+          onClick={() => navigate('/expenses')}
         />
       </div>
 

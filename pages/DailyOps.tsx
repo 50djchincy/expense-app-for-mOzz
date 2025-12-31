@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAccounts } from '../AccountsContext';
 import { useAuth } from '../AuthContext';
@@ -33,7 +32,8 @@ import {
   Banknote,
   CreditCard,
   FileText,
-  ArrowUpCircle
+  ArrowUpCircle,
+  Landmark // [NEW]: Added Icon for Bank
 } from 'lucide-react';
 import { Shift, Customer, Transaction } from '../types';
 
@@ -63,6 +63,7 @@ export const DailyOps: React.FC = () => {
   const [showDenomCalc, setShowDenomCalc] = useState(false);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [showTopUpModal, setShowTopUpModal] = useState(false);
+  const [showBankCashModal, setShowBankCashModal] = useState(false); // [NEW]: State for Bank Modal
   const [actionLoading, setActionLoading] = useState(false);
 
   // Closing Form States
@@ -118,8 +119,9 @@ export const DailyOps: React.FC = () => {
       
       const unsub = onSnapshot(q, (snap) => {
         const docs = snap.docs.map(d => d.data() as Transaction);
+        // [UPDATED]: Filter now includes 'Transfer' and 'Capital' so banking cash counts as money leaving the drawer
         const filtered = docs.filter(tx => 
-          tx.category === 'Operations' && 
+          (tx.category === 'Operations' || tx.category === 'Transfer' || tx.category === 'Capital') && 
           tx.date >= currentShift.openedAt
         );
         setShiftExpenses(filtered);
@@ -190,6 +192,33 @@ export const DailyOps: React.FC = () => {
       alert(`Success: $${amount} added to Register Cash.`);
     } catch (err: any) {
       alert(err.message || "Top up failed.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // [NEW]: Handle Bank Cash Logic
+  const handleBankCashSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const formData = new FormData(e.target as HTMLFormElement);
+    const amount = Number(formData.get('amount'));
+    const targetId = formData.get('targetId') as string;
+
+    if (!amount || amount <= 0) return;
+
+    setActionLoading(true);
+    try {
+      await transferFunds(
+        'till_float',
+        targetId,
+        amount,
+        'Register Cash Deposit (Bank Drop)',
+        'Transfer' // Important: Category is Transfer
+      );
+      setShowBankCashModal(false);
+      alert(`Success: $${amount} moved to Bank.`);
+    } catch (err: any) {
+      alert(err.message || "Banking failed.");
     } finally {
       setActionLoading(false);
     }
@@ -520,6 +549,15 @@ export const DailyOps: React.FC = () => {
                   ))}
                </div>
                <div className="grid grid-cols-1 gap-4 mt-8">
+                  {/* [NEW]: Bank Cash Button */}
+                  <button onClick={() => setShowBankCashModal(true)} className="p-5 bg-slate-900 hover:bg-slate-800 border border-white/5 rounded-2xl flex items-center gap-4 transition-all group">
+                    <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center shadow-lg"><Landmark size={24} /></div>
+                    <div className="text-left">
+                      <p className="font-bold text-white text-sm">Bank Cash</p>
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mt-0.5">Move Cash to Safe/Bank</p>
+                    </div>
+                  </button>
+
                   <button onClick={() => setShowExpenseModal(true)} className="p-5 bg-slate-900 hover:bg-slate-800 border border-white/5 rounded-2xl flex items-center gap-4 transition-all group">
                     <div className="w-12 h-12 rounded-2xl bg-rose-500/10 text-rose-400 flex items-center justify-center shadow-lg"><TrendingDown size={24} /></div>
                     <div className="text-left">
@@ -642,6 +680,58 @@ export const DailyOps: React.FC = () => {
 
                 <button disabled={actionLoading} className="w-full py-5 gradient-purple rounded-2xl text-white font-black shadow-xl shadow-purple-500/20 active:scale-95 transition-all flex items-center justify-center gap-3">
                    {actionLoading ? <Loader2 className="animate-spin" size={24} /> : <ArrowUpCircle size={24} />} Confirm Injection
+                </button>
+             </form>
+          </div>
+        </div>
+      )}
+
+      {/* [NEW]: Bank Cash Modal */}
+      {showBankCashModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setShowBankCashModal(false)} />
+          <div className="glass w-full max-w-md rounded-[2.5rem] p-8 md:p-10 shadow-2xl relative animate-in zoom-in-95 duration-200 overflow-hidden">
+             <div className="absolute top-0 left-0 right-0 h-1 gradient-blue" /> {/* Blue theme for Banking */}
+             <div className="flex items-center justify-between mb-8">
+               <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center">
+                    <Landmark size={24} />
+                  </div>
+                  <h2 className="text-2xl font-outfit font-bold text-white">Bank Cash</h2>
+               </div>
+               <button onClick={() => setShowBankCashModal(false)} className="text-slate-500 hover:text-white"><X size={24} /></button>
+             </div>
+             
+             <form onSubmit={handleBankCashSubmit} className="space-y-6">
+                <div className="space-y-2">
+                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Destination</label>
+                   <select 
+                      name="targetId" required 
+                      className="w-full bg-slate-900 border border-white/5 rounded-2xl px-4 py-4 text-white outline-none appearance-none cursor-pointer"
+                   >
+                      <option value="business_bank">Business Bank</option>
+                      {/* You can add other accounts here if needed, e.g. Staff Card */}
+                      {accounts.find(a => a.id === 'staff_card') && <option value="staff_card">Staff Card</option>}
+                   </select>
+                </div>
+
+                <div className="space-y-2">
+                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Amount to Bank</label>
+                   <input 
+                      name="amount" required type="number" step="0.01" 
+                      className="w-full bg-slate-900 border border-white/5 rounded-2xl px-4 py-5 text-4xl font-black text-white" 
+                      placeholder="0.00" 
+                   />
+                </div>
+
+                <div className="p-4 bg-indigo-500/5 border border-indigo-500/10 rounded-2xl">
+                   <p className="text-[10px] text-indigo-400 leading-relaxed font-medium">
+                     Money will be moved from the Register (Till) to the selected account. This will decrease your Expected Cash in Drawer.
+                   </p>
+                </div>
+
+                <button disabled={actionLoading} className="w-full py-5 gradient-blue rounded-2xl text-white font-black shadow-xl shadow-blue-500/20 active:scale-95 transition-all flex items-center justify-center gap-3">
+                   {actionLoading ? <Loader2 className="animate-spin" size={24} /> : <ArrowRight size={24} />} Confirm Transfer
                 </button>
              </form>
           </div>

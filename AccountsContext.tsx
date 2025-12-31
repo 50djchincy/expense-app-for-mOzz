@@ -1,4 +1,3 @@
-
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { collection, query, onSnapshot, doc, setDoc, writeBatch, increment, getDoc, addDoc } from 'firebase/firestore';
 import { db, getFullPath } from './firebase';
@@ -23,6 +22,8 @@ interface AccountsContextType {
   saveEntity: (collection: string, data: any) => Promise<void>;
   updateEntity: (collection: string, id: string, data: any) => Promise<void>;
   resetSandbox: () => void;
+  // [NEW]: Add adjustBalance to the interface
+  adjustBalance: (accountId: string, newBalance: number, reason: string) => Promise<void>;
 }
 
 const AccountsContext = createContext<AccountsContextType | undefined>(undefined);
@@ -41,6 +42,8 @@ const INITIAL_ACCOUNTS: Account[] = [
   { id: 'staff_advances_rec', name: 'Staff Advances', type: 'RECEIVABLE', balance: 0, icon: 'History' },
   { id: 'service_fee_income', name: 'Total Gross Sales (Revenue)', type: 'REVENUE', balance: 0, icon: 'Zap' },
   { id: 'foreign_currency_reserve', name: 'Foreign Currency Reserve', type: 'ASSET', balance: 0, icon: 'SmartphoneNfc' },
+  // [NEW]: Equity Account for Balance Adjustments
+  { id: 'equity_adjustments', name: 'Equity & Adjustments', type: 'EQUITY', balance: 0, icon: 'Scale' },
 ];
 
 export const AccountsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -126,11 +129,13 @@ export const AccountsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const currentAccounts = getSandboxData('accounts', INITIAL_ACCOUNTS);
       const updatedAccounts = currentAccounts.map(acc => {
         if (acc.id === fromId) {
-          const delta = acc.type === 'LIABILITY' ? amount : -amount;
+          // [UPDATE]: Treat EQUITY like LIABILITY for Sandbox
+          const delta = (acc.type === 'LIABILITY' || acc.type === 'EQUITY') ? amount : -amount;
           return { ...acc, balance: acc.balance + delta };
         }
         if (acc.id === toId) {
-          const delta = acc.type === 'LIABILITY' ? -amount : amount;
+          // [UPDATE]: Treat EQUITY like LIABILITY for Sandbox
+          const delta = (acc.type === 'LIABILITY' || acc.type === 'EQUITY') ? -amount : amount;
           return { ...acc, balance: acc.balance + delta };
         }
         return acc;
@@ -162,8 +167,9 @@ export const AccountsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const toAcc = accounts.find(a => a.id === toId);
     if (!fromAcc || !toAcc) throw new Error("Account not found");
 
-    const fromDelta = fromAcc.type === 'LIABILITY' ? amount : -amount;
-    const toDelta = toAcc.type === 'LIABILITY' ? -amount : amount;
+    // [UPDATE]: Treat EQUITY like LIABILITY for Firestore updates
+    const fromDelta = (fromAcc.type === 'LIABILITY' || fromAcc.type === 'EQUITY') ? amount : -amount;
+    const toDelta = (toAcc.type === 'LIABILITY' || toAcc.type === 'EQUITY') ? -amount : amount;
 
     batch.update(doc(db, getFullPath('accounts'), fromId), { balance: increment(fromDelta) });
     batch.update(doc(db, getFullPath('accounts'), toId), { balance: increment(toDelta) });
@@ -184,6 +190,41 @@ export const AccountsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     await batch.commit();
   }, [accounts, profile, isSandbox]);
+
+  // [NEW]: Smart Adjust Logic
+  const adjustBalance = async (accountId: string, newBalance: number, reason: string) => {
+    const account = accounts.find(a => a.id === accountId);
+    if (!account) throw new Error("Account not found");
+
+    const currentBalance = account.balance;
+    const diff = newBalance - currentBalance;
+
+    if (diff === 0) return;
+
+    // Logic: If Balance goes UP (Positive Diff), money comes FROM Equity TO Account.
+    //        If Balance goes DOWN (Negative Diff), money goes FROM Account TO Equity.
+    const amount = Math.abs(diff);
+
+    if (diff > 0) {
+      // Balance increased -> Equity Injection
+      await transferFunds(
+        'equity_adjustments', 
+        accountId, 
+        amount, 
+        `Manual Adjustment: ${reason}`, 
+        'Adjustment'
+      );
+    } else {
+      // Balance decreased -> Write-off to Equity
+      await transferFunds(
+        accountId, 
+        'equity_adjustments', 
+        amount, 
+        `Manual Adjustment: ${reason}`, 
+        'Adjustment'
+      );
+    }
+  };
 
   const saveEntity = async (coll: string, data: any) => {
     if (isSandbox) {
@@ -224,7 +265,8 @@ export const AccountsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     <div className="max-w-7xl mx-auto h-full">
       <AccountsContext.Provider value={{ 
         accounts, transactions, shifts, expenseTemplates, 
-        loading, isSandbox, transferFunds, saveEntity, updateEntity, resetSandbox 
+        loading, isSandbox, transferFunds, saveEntity, updateEntity, resetSandbox,
+        adjustBalance // Export the new function
       }}>
         {children}
       </AccountsContext.Provider>

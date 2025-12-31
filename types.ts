@@ -8,7 +8,7 @@ export interface UserProfile {
   createdAt: number;
 }
 
-export type AccountType = 'ASSET' | 'LIABILITY' | 'RECEIVABLE' | 'REVENUE' | 'EXPENSE';
+export type AccountType = 'ASSET' | 'LIABILITY' | 'RECEIVABLE' | 'REVENUE' | 'EXPENSE' | 'EQUITY';
 
 export interface Account {
   id: string;
