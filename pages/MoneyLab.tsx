@@ -588,127 +588,257 @@ const AccountCard = ({ account, isShiftOpen, onClick }: { account: Account, isSh
 // ------------------------------------------------------------------
 
 const AccountLedgerModal = ({ account, transactions, onClose }: { account: Account, transactions: Transaction[], onClose: () => void }) => {
+
   const Icon = ICON_MAP[account.icon] || FlaskConical;
+
   const [searchTerm, setSearchTerm] = useState('');
 
+
+
   // Get transactions for this account
+
   const accountTxs = useMemo(() => {
+
     return transactions.filter(tx => tx.fromAccountId === account.id || tx.toAccountId === account.id);
+
   }, [transactions, account.id]);
 
+
+
   // Filter by search
+
   const filteredTxs = useMemo(() => {
+
     if (!searchTerm) return accountTxs;
+
     const term = searchTerm.toLowerCase();
+
     return accountTxs.filter(tx => 
+
       tx.description.toLowerCase().includes(term) || 
+
       tx.amount.toString().includes(term) ||
+
       tx.category.toLowerCase().includes(term)
+
     );
+
   }, [accountTxs, searchTerm]);
 
+
+
   // Calculate Stats
+
   const stats = useMemo(() => {
+
     return accountTxs.reduce((acc, tx) => {
+
        if (tx.toAccountId === account.id) {
+
          acc.in += tx.amount;
+
        } else {
+
          acc.out += tx.amount;
+
        }
+
        return acc;
+
     }, { in: 0, out: 0 });
+
   }, [accountTxs, account.id]);
 
+
+
   return (
+
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+
       <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={onClose} />
-      <div className="glass w-full max-w-2xl rounded-[2.5rem] shadow-2xl relative animate-in zoom-in-95 duration-200 flex flex-col max-h-[85vh] overflow-hidden border border-white/10">
+
+      {/* Changed: p-4 on mobile, p-0 overflow hidden wrapper */}
+
+      <div className="glass w-full max-w-2xl rounded-[2rem] md:rounded-[2.5rem] shadow-2xl relative animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh] overflow-hidden border border-white/10">
+
         
-        {/* Header */}
-        <div className="p-8 pb-4 border-b border-white/5 bg-slate-900/50">
+
+        {/* Header - Adjusted padding and flex layout */}
+
+        <div className="p-5 md:p-8 pb-4 border-b border-white/5 bg-slate-900/50 shrink-0">
+
            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-4">
-                 <div className="w-16 h-16 rounded-3xl bg-slate-800 border border-white/5 flex items-center justify-center text-white shadow-xl">
-                    <Icon size={32} />
+
+              <div className="flex items-center gap-3 md:gap-4">
+
+                 <div className="w-12 h-12 md:w-16 md:h-16 rounded-2xl md:rounded-3xl bg-slate-800 border border-white/5 flex items-center justify-center text-white shadow-xl shrink-0">
+
+                    <Icon className="w-6 h-6 md:w-8 md:h-8" />
+
                  </div>
+
                  <div>
-                    <h2 className="text-2xl font-bold text-white">{account.name}</h2>
-                    <p className="text-sm text-slate-400 font-medium">Ledger & Statistics</p>
+
+                    <h2 className="text-lg md:text-2xl font-bold text-white leading-tight">{account.name}</h2>
+
+                    <p className="text-xs md:text-sm text-slate-400 font-medium">Ledger & Statistics</p>
+
                  </div>
+
               </div>
+
               <button onClick={onClose} className="p-2 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-colors">
-                 <X size={24} />
+
+                 <X size={20} />
+
               </button>
+
            </div>
 
-           {/* Quick Stats Row */}
-           <div className="grid grid-cols-3 gap-4 mt-8">
-              <div className="p-4 bg-slate-900 rounded-2xl border border-white/5">
+
+
+           {/* Quick Stats Row - Stacked on mobile, 3 cols on desktop */}
+
+           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4 mt-6">
+
+              <div className="p-3 md:p-4 bg-slate-900 rounded-xl md:rounded-2xl border border-white/5 flex items-center justify-between md:block">
+
                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Current Balance</p>
-                 <p className="text-2xl font-black text-white mt-1">${account.balance.toLocaleString()}</p>
+
+                 <p className="text-xl md:text-2xl font-black text-white mt-0 md:mt-1">${account.balance.toLocaleString()}</p>
+
               </div>
-              <div className="p-4 bg-emerald-500/5 rounded-2xl border border-emerald-500/10">
-                 <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest flex items-center gap-1"><ArrowDownLeft size={12} /> Total In</p>
-                 <p className="text-xl font-black text-emerald-400 mt-1">+${stats.in.toLocaleString()}</p>
+
+              <div className="grid grid-cols-2 md:block gap-3 md:gap-0 col-span-1 md:col-span-2">
+
+                 <div className="p-3 md:p-4 bg-emerald-500/5 rounded-xl md:rounded-2xl border border-emerald-500/10">
+
+                    <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest flex items-center gap-1"><ArrowDownLeft size={12} /> Total In</p>
+
+                    <p className="text-lg md:text-xl font-black text-emerald-400 mt-1">+${stats.in.toLocaleString()}</p>
+
+                 </div>
+
+                 <div className="p-3 md:p-4 bg-rose-500/5 rounded-xl md:rounded-2xl border border-rose-500/10">
+
+                    <p className="text-[10px] font-bold text-rose-500 uppercase tracking-widest flex items-center gap-1"><ArrowUpRight size={12} /> Total Out</p>
+
+                    <p className="text-lg md:text-xl font-black text-rose-400 mt-1">-${stats.out.toLocaleString()}</p>
+
+                 </div>
+
               </div>
-              <div className="p-4 bg-rose-500/5 rounded-2xl border border-rose-500/10">
-                 <p className="text-[10px] font-bold text-rose-500 uppercase tracking-widest flex items-center gap-1"><ArrowUpRight size={12} /> Total Out</p>
-                 <p className="text-xl font-black text-rose-400 mt-1">-${stats.out.toLocaleString()}</p>
-              </div>
+
            </div>
+
         </div>
 
-        {/* Ledger */}
+
+
+        {/* Ledger List */}
+
         <div className="flex-1 flex flex-col min-h-0 bg-slate-900/30">
+
            {/* Search Bar */}
-           <div className="px-8 py-4 border-b border-white/5">
+
+           <div className="px-5 md:px-8 py-3 md:py-4 border-b border-white/5 shrink-0">
+
               <div className="relative">
+
                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+
                  <input 
+
                    type="text" 
+
                    placeholder="Search ledger..." 
+
                    value={searchTerm}
+
                    onChange={(e) => setSearchTerm(e.target.value)}
-                   className="w-full bg-slate-900 border border-white/5 rounded-xl py-3 pl-12 pr-4 text-sm text-white focus:ring-1 focus:ring-purple-500/50 outline-none placeholder:text-slate-600"
+
+                   className="w-full bg-slate-900 border border-white/5 rounded-xl py-2.5 md:py-3 pl-12 pr-4 text-sm text-white focus:ring-1 focus:ring-purple-500/50 outline-none placeholder:text-slate-600"
+
                  />
+
               </div>
+
            </div>
+
+
 
            {/* Transaction List */}
-           <div className="flex-1 overflow-y-auto p-4 space-y-2">
+
+           <div className="flex-1 overflow-y-auto p-3 md:p-4 space-y-2">
+
               {filteredTxs.length === 0 ? (
+
                  <div className="flex flex-col items-center justify-center py-12 text-slate-500">
+
                     <History size={40} className="mb-3 opacity-20" />
+
                     <p className="text-sm font-medium">No transactions found</p>
+
                  </div>
+
               ) : (
+
                  filteredTxs.map(tx => {
+
                     const isIncome = tx.toAccountId === account.id;
+
                     return (
-                       <div key={tx.id} className="group p-4 rounded-2xl bg-slate-900/50 hover:bg-slate-900 border border-white/5 hover:border-white/10 transition-all flex items-center justify-between">
-                          <div className="flex items-center gap-4">
-                             <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${isIncome ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
-                                {isIncome ? <ArrowDownLeft size={18} /> : <ArrowUpRight size={18} />}
+
+                       <div key={tx.id} className="group p-3 md:p-4 rounded-2xl bg-slate-900/50 hover:bg-slate-900 border border-white/5 hover:border-white/10 transition-all flex items-center justify-between">
+
+                          <div className="flex items-center gap-3 md:gap-4 overflow-hidden">
+
+                             <div className={`w-8 h-8 md:w-10 md:h-10 rounded-xl flex items-center justify-center shrink-0 ${isIncome ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
+
+                                {isIncome ? <ArrowDownLeft size={14} md:size={18} /> : <ArrowUpRight size={14} md:size={18} />}
+
                              </div>
-                             <div>
-                                <p className="text-sm font-bold text-white group-hover:text-purple-200 transition-colors">{tx.description}</p>
+
+                             <div className="min-w-0">
+
+                                <p className="text-sm font-bold text-white group-hover:text-purple-200 transition-colors truncate">{tx.description}</p>
+
                                 <div className="flex items-center gap-2 mt-0.5">
-                                   <span className="text-[10px] font-bold text-slate-500 bg-white/5 px-1.5 py-0.5 rounded uppercase">{tx.category}</span>
-                                   <span className="text-[10px] text-slate-600 flex items-center gap-1"><Calendar size={10} /> {new Date(tx.date).toLocaleDateString()}</span>
+
+                                   <span className="text-[9px] font-bold text-slate-500 bg-white/5 px-1.5 py-0.5 rounded uppercase shrink-0">{tx.category}</span>
+
+                                   <span className="text-[9px] text-slate-600 flex items-center gap-1 truncate"><Calendar size={9} /> {new Date(tx.date).toLocaleDateString()}</span>
+
                                 </div>
+
                              </div>
+
                           </div>
-                          <p className={`text-lg font-black tracking-tighter ${isIncome ? 'text-emerald-400' : 'text-rose-400'}`}>
+
+                          <p className={`text-base md:text-lg font-black tracking-tighter shrink-0 ${isIncome ? 'text-emerald-400' : 'text-rose-400'}`}>
+
                              {isIncome ? '+' : '-'}${tx.amount.toLocaleString()}
+
                           </p>
+
                        </div>
+
                     );
+
                  })
+
               )}
+
            </div>
+
         </div>
 
+
+
       </div>
+
     </div>
+
   );
+
 };

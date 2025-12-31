@@ -407,118 +407,140 @@ export const Staff: React.FC = () => {
 
       {/* --- HOLIDAYS TAB --- */}
       {activeTab === 'holidays' && (
-        <div className="glass rounded-[2.5rem] p-8 border border-white/10 shadow-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-6 mb-8">
-            <div>
-              <h2 className="text-xl font-bold text-white">Holiday Planner</h2>
-              <p className="text-xs text-slate-400 mt-1">
-                 {selectedStaffForHoliday ? 'Click dates to mark leave.' : 'Select a staff member to edit schedule.'}
-              </p>
-            </div>
-            
-            <div className="flex items-center gap-4">
-               {/* Month Navigator */}
-               <div className="flex items-center gap-2 bg-slate-900/50 p-1 rounded-2xl border border-white/5">
-                  <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))} className="p-2 hover:bg-white/5 rounded-xl text-slate-400"><ChevronLeft size={20} /></button>
-                  <span className="text-sm font-bold text-white min-w-[120px] text-center">
-                    {currentMonth.toLocaleDateString([], { month: 'long', year: 'numeric' })}
-                  </span>
-                  <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))} className="p-2 hover:bg-white/5 rounded-xl text-slate-400"><ChevronRight size={20} /></button>
-               </div>
-               
-               {/* Staff Selector */}
-               <select 
-                  value={selectedStaffForHoliday}
-                  onChange={(e) => setSelectedStaffForHoliday(e.target.value)}
-                  className={`bg-slate-900 border rounded-2xl px-4 py-2.5 text-white text-sm font-bold outline-none focus:ring-2 focus:ring-purple-500/50 transition-all ${selectedStaffForHoliday ? 'border-purple-500/50 ring-1 ring-purple-500/30' : 'border-white/10'}`}
-               >
-                  <option value="">Overview Mode (Read Only)</option>
-                  {staff.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-               </select>
-            </div>
-          </div>
 
-          <div className="mb-6 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Active Cycle:</span>
-                 <span className="text-xs font-bold text-purple-400">
-                    {periodRange.startDate.toLocaleDateString()} — {periodRange.endDate.toLocaleDateString()}
-                 </span>
-              </div>
-              {!selectedStaffForHoliday && (
-                 <div className="flex items-center gap-2 text-amber-400 bg-amber-500/10 px-3 py-1 rounded-lg border border-amber-500/10">
-                    <AlertCircle size={12} />
-                    <span className="text-[10px] font-bold uppercase">Overview Mode</span>
-                 </div>
-              )}
-          </div>
+<div className="glass rounded-[1.5rem] md:rounded-[2.5rem] p-4 md:p-8 border border-white/10 shadow-2xl">
 
-          <div className="grid grid-cols-7 gap-3">
-             {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
-               <div key={d} className="text-center text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">{d}</div>
-             ))}
-             
-             {/* Empty slots for alignment */}
-             {Array.from({ length: daysInPeriod[0].getDay() }).map((_, i) => <div key={`pad-${i}`} />)}
+  <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
 
-             {daysInPeriod.map((date) => {
-               const dateStr = date.toISOString().split('T')[0];
-               
-               const isSelectedStaffHoliday = selectedStaffForHoliday 
-                  ? holidays.some(h => h.staffId === selectedStaffForHoliday && h.date === dateStr)
-                  : false;
+    <h2 className="text-xl font-bold text-white">Holiday Planner</h2>
 
-               const allLeavesOnDay = holidays.filter(h => h.date === dateStr);
+    <div className="flex items-center justify-between gap-4 bg-slate-900/50 p-1 rounded-2xl border border-white/5 w-full md:w-auto">
 
-               return (
-                 <button
-                   key={dateStr}
-                   onClick={() => selectedStaffForHoliday && toggleHoliday(selectedStaffForHoliday, dateStr)}
-                   disabled={!selectedStaffForHoliday}
-                   className={`
-                     aspect-square rounded-2xl border flex flex-col items-center justify-start pt-3 gap-1 transition-all relative overflow-hidden group
-                     ${isSelectedStaffHoliday 
-                        ? 'bg-rose-500/20 border-rose-500/50 text-rose-400' 
-                        : selectedStaffForHoliday 
-                           ? 'bg-white/5 border-white/5 hover:bg-white/10 text-slate-400 hover:text-white cursor-pointer'
-                           : 'bg-white/5 border-white/5 text-slate-500 cursor-default'
-                     }
-                   `}
-                 >
-                   <span className="text-sm font-bold z-10">{date.getDate()}</span>
-                   
-                   {/* Layout for the dots - BIGGER SIZE (w-2.5 h-2.5) */}
-                   <div className="flex flex-wrap items-center justify-center gap-1.5 px-2 mt-1">
-                      {allLeavesOnDay.map(h => {
-                         const s = staff.find(staff => staff.id === h.staffId);
-                         if (!s) return null;
-                         return (
-                           <div 
-                             key={h.id} 
-                             title={s.name}
-                             className={`w-2.5 h-2.5 rounded-full shadow-sm ${h.staffId === selectedStaffForHoliday ? 'ring-2 ring-white scale-110' : ''}`}
-                             style={{ backgroundColor: s.color }}
-                           />
-                         );
-                      })}
-                   </div>
+       <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))} className="p-2 hover:bg-white/5 rounded-xl text-slate-400"><ChevronLeft size={20} /></button>
 
-                   {isSelectedStaffHoliday && <div className="absolute inset-0 bg-rose-500/10 blur-xl" />}
-                 </button>
-               );
-             })}
-          </div>
+       <span className="text-sm font-bold text-white min-w-[120px] text-center">
 
-          <div className="mt-6 flex flex-wrap gap-4 pt-4 border-t border-white/5">
-             {staff.map(s => (
-                <div key={s.id} className="flex items-center gap-2">
-                   <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: s.color }} />
-                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{s.name}</span>
-                </div>
-             ))}
-          </div>
-        </div>
-      )}
+         {currentMonth.toLocaleDateString([], { month: 'long', year: 'numeric' })}
+
+       </span>
+
+       <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))} className="p-2 hover:bg-white/5 rounded-xl text-slate-400"><ChevronRight size={20} /></button>
+
+    </div>
+
+  </div>
+
+
+
+  {/* Adjusted Grid: gap-1 on mobile, gap-4 on desktop */}
+
+  <div className="grid grid-cols-7 gap-1 md:gap-4">
+
+     {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+
+       <div key={d} className="text-center text-[8px] md:text-[10px] font-bold text-slate-500 uppercase tracking-widest py-2">{d}</div>
+
+     ))}
+
+     {daysInMonth.map((date, idx) => {
+
+       if (!date) return <div key={`pad-${idx}`} />;
+
+       const dateStr = date.toISOString().split('T')[0];
+
+       const dayHolidays = holidays.filter(h => h.date === dateStr);
+
+       
+
+       return (
+
+         <div key={dateStr} className="aspect-square glass rounded-lg md:rounded-2xl border border-white/5 p-1 md:p-2 flex flex-col gap-1 relative group hover:border-purple-500/30 transition-all cursor-default">
+
+           <span className="text-[10px] md:text-xs font-bold text-slate-400 mb-0.5 md:mb-1">{date.getDate()}</span>
+
+           
+
+           {/* Dots Container: Tighter packing for mobile */}
+
+           <div className="flex flex-wrap content-start gap-0.5 md:gap-1">
+
+              {dayHolidays.map(h => {
+
+                const s = staff.find(sm => sm.id === h.staffId);
+
+                return (
+
+                  <div key={h.id} title={s?.name} className="w-1.5 h-1.5 md:w-2 md:h-2 rounded-full shadow-sm" style={{ backgroundColor: s?.color }} />
+
+                );
+
+              })}
+
+           </div>
+
+           
+
+           {/* Hover Interaction Overlay */}
+
+           <div className="absolute inset-0 bg-slate-900/95 rounded-lg md:rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity flex flex-wrap items-center justify-center p-1 md:p-2 gap-1 z-20 content-center">
+
+              {staff.map(s => {
+
+                const active = dayHolidays.some(h => h.staffId === s.id);
+
+                return (
+
+                  <button 
+
+                    key={s.id} 
+
+                    onClick={() => toggleHoliday(s.id, dateStr)}
+
+                    title={s.name}
+
+                    className={`w-5 h-5 md:w-6 md:h-6 rounded-md md:rounded-lg flex items-center justify-center transition-all ${active ? 'shadow-lg scale-110' : 'bg-white/5 opacity-50 hover:opacity-100'}`}
+
+                    style={{ backgroundColor: active ? s.color : undefined }}
+
+                  >
+
+                    <Heart size={8} className={`md:w-3 md:h-3 ${active ? 'text-white' : 'text-slate-400'}`} />
+
+                  </button>
+
+                );
+
+              })}
+
+           </div>
+
+         </div>
+
+       );
+
+     })}
+
+  </div>
+
+  <div className="mt-6 md:mt-8 flex gap-3 md:gap-4 flex-wrap justify-center md:justify-start">
+
+     {staff.map(s => (
+
+       <div key={s.id} className="flex items-center gap-1.5 text-[9px] md:text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-900/50 px-2 py-1 rounded-lg border border-white/5">
+
+         <div className="w-1.5 h-1.5 md:w-2 md:h-2 rounded-full" style={{ backgroundColor: s.color }} />
+
+         {s.name}
+
+       </div>
+
+     ))}
+
+  </div>
+
+</div>
+
+)}
 
       {/* --- PAYROLL TAB --- */}
       {activeTab === 'payroll' && (
