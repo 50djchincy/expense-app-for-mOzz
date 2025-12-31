@@ -143,9 +143,7 @@ export const Expenses: React.FC = () => {
       const isIOU = form.fromAccountId === 'pending_bills';
       const isTill = form.fromAccountId === 'till_float';
 
-      const dueDate = isIOU ? Date.now() + (form.dueDateOffset * 24 * 60 * 60 * 1000) : undefined;
-      
-      // Determine Transaction Date:
+      // 1. Determine Transaction Date FIRST
       // If Till Float -> Always NOW (System Time).
       // If Other -> Parse user input. Fallback to NOW if invalid/empty.
       let txDate = Date.now();
@@ -154,7 +152,11 @@ export const Expenses: React.FC = () => {
           if (!isNaN(parsed)) txDate = parsed;
       }
 
-      // 1. Execute Transfer
+      // 2. Calculate Due Date based on txDate (CORRECTED LOGIC)
+      // This allows backdated bills to immediately trigger "Overdue" alerts
+      const dueDate = isIOU ? txDate + (form.dueDateOffset * 24 * 60 * 60 * 1000) : undefined;
+
+      // 3. Execute Transfer
       await transferFunds(
         form.fromAccountId,
         'operational_expenses',
@@ -170,7 +172,7 @@ export const Expenses: React.FC = () => {
         }
       );
 
-      // 2. Save Template
+      // 4. Save Template
       if (form.saveAsTemplate) {
         await addDoc(collection(db, getFullPath('expense_templates')), {
           name: description,
@@ -181,7 +183,7 @@ export const Expenses: React.FC = () => {
         });
       }
 
-      // 3. Create Recurring Reminder
+      // 5. Create Recurring Reminder
       if (form.isRecurring) {
         await addDoc(collection(db, getFullPath('recurring_expenses')), {
           name: description,
@@ -196,14 +198,14 @@ export const Expenses: React.FC = () => {
         });
       }
 
-      // 4. Stock Trigger
+      // 6. Stock Trigger
       if (form.receiveStock) {
         handleStockTrigger(description, amountNum);
       } else {
         alert(isIOU ? "Bill logged as Pending Payment (IOU)" : "Expense logged successfully!");
       }
 
-      // Reset
+      // Reset Form
       setForm({
         ...form,
         amount: '',
