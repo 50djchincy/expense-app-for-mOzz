@@ -83,15 +83,29 @@ export const AccountsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     const unsubAccounts = onSnapshot(query(collection(db, getFullPath('accounts'))), (snap) => {
       const fetched = snap.docs.map(d => ({ ...d.data(), id: d.id } as Account));
+      
       if (fetched.length === 0) {
+          // Initialize DB if empty
           const batch = writeBatch(db);
           INITIAL_ACCOUNTS.forEach(a => batch.set(doc(db, getFullPath('accounts'), a.id), a));
           batch.commit();
       } else {
-          setAccounts(fetched);
+          // [FIX]: Check for missing system accounts (like 'equity_adjustments') and create them
+          const missingAccounts = INITIAL_ACCOUNTS.filter(
+            initAcc => !fetched.some(existing => existing.id === initAcc.id)
+          );
+
+          if (missingAccounts.length > 0) {
+            console.log("Creating missing system accounts:", missingAccounts.map(a => a.name));
+            const batch = writeBatch(db);
+            missingAccounts.forEach(a => batch.set(doc(db, getFullPath('accounts'), a.id), a));
+            batch.commit(); 
+            // The snapshot will fire again automatically after this write
+          } else {
+            setAccounts(fetched);
+          }
       }
     });
-
     const unsubTxs = onSnapshot(query(collection(db, getFullPath('transactions'))), (snap) => {
       const fetched = snap.docs.map(d => ({ ...d.data(), id: d.id } as Transaction));
       fetched.sort((a, b) => b.date - a.date);
