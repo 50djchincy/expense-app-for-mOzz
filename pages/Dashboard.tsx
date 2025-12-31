@@ -1,8 +1,9 @@
-
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAccounts } from '../AccountsContext';
 import { useAuth } from '../AuthContext';
+import { db, getFullPath } from '../firebase';
+import { collection, getDocs } from 'firebase/firestore'; 
 import { 
   Wallet, 
   Plus,
@@ -15,7 +16,10 @@ import {
   Loader2,
   CheckCircle2,
   TrendingDown,
-  ArrowRight
+  ArrowRight,
+  AlertTriangle,
+  Bell,
+  CheckCircle
 } from 'lucide-react';
 import { 
   XAxis, 
@@ -27,10 +31,20 @@ import {
   Area
 } from 'recharts';
 
+interface AlertItem {
+  id: string;
+  type: 'critical' | 'warning';
+  title: string;
+  message: string;
+  route: string;
+}
+
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const { accounts, transactions, loading } = useAccounts();
+  const [systemAlerts, setSystemAlerts] = useState<AlertItem[]>([]);
+  const [checkingStatus, setCheckingStatus] = useState(true);
 
   // Core Financials
   const tillFloat = accounts.find(a => a.id === 'till_float')?.balance || 0;
@@ -47,10 +61,8 @@ export const Dashboard: React.FC = () => {
 
   const netLiquidity = totalAssets - totalLiabilities;
 
-  // Master Ledger Slice for Dashboard
   const recentTransactions = transactions.slice(0, 8);
 
-  // Simplified Chart Data - In a real app we would aggregate by date
   const dummyChartData = [
     { name: 'Mon', revenue: 4200, expense: 3100 },
     { name: 'Tue', revenue: 3800, expense: 3400 },
@@ -63,17 +75,134 @@ export const Dashboard: React.FC = () => {
 
   const getAccountName = (id: string) => accounts.find(a => a.id === id)?.name || id;
 
+  // --- AUTOMATED CHECKS ON LAUNCH ---
+  useEffect(() => {
+    const runSystemChecks = async () => {
+        if (loading) return;
+        const newAlerts: AlertItem[] = [];
+
+        // 1. Check for Overdue Pending Bills (7-Day Rule)
+        const overdueBills = transactions.filter(t => {
+            if (t.fromAccountId !== 'pending_bills' || t.isSettled) return false;
+            
+            // FALLBACK: If 'dueDate' is missing (old data), assume Date + 7 Days
+            const effectiveDueDate = t.dueDate || (t.date + (7 * 24 * 60 * 60 * 1000));
+            return effectiveDueDate < Date.now();
+        });
+
+        if (overdueBills.length > 0) {
+            const totalOverdue = overdueBills.reduce((sum, t) => sum + t.amount, 0);
+            newAlerts.push({
+                id: 'overdue_bills',
+                type: 'critical',
+                title: 'Overdue Settlements',
+                message: `${overdueBills.length} bills ($${totalOverdue.toLocaleString()}) exceed 7 days.`,
+                route: '/expenses'
+            });
+        }
+
+        // 2. Check for Due Recurring Payments
+        try {
+            const recurringSnap = await getDocs(collection(db, getFullPath('recurring_expenses')));
+            const recurring = recurringSnap.docs.map(d => d.data());
+            
+            // Check Due Today or Tomorrow
+            const dueRecurring = recurring.filter((r: any) => {
+                if (!r.isActive) return false;
+                // FALLBACK: If nextDueDate is missing, assume it's due now to force setup
+                const due = r.nextDueDate || Date.now(); 
+                return due <= (Date.now() + 86400000);
+            });
+
+            if (dueRecurring.length > 0) {
+                newAlerts.push({
+                    id: 'recurring_due',
+                    type: 'warning',
+                    title: 'Recurring Due',
+                    message: `${dueRecurring.length} payments need confirmation.`,
+                    route: '/expenses'
+                });
+            }
+        } catch (error) {
+            console.error("Failed to fetch recurring checks", error);
+        }
+
+        setSystemAlerts(newAlerts);
+        setCheckingStatus(false);
+    };
+
+    runSystemChecks();
+  }, [loading, transactions]);
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-32 gap-4">
         <Loader2 className="animate-spin text-purple-500" size={48} />
-        <p className="text-slate-400 font-medium animate-pulse uppercase tracking-widest text-[10px]">Synchronizing Master Ledger...</p>
+        <p className="text-slate-400 font-medium animate-pulse uppercase tracking-widest text-[10px]">Synchronizing...</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-8 animate-fade-in pb-12">
+      {/* SYSTEM STATUS BAR (Always Visible) */}
+      <div className={`rounded-2xl p-4 border flex items-center justify-between transition-colors ${
+          checkingStatus ? 'bg-slate-900 border-white/5' :
+          systemAlerts.length > 0 ? 'bg-rose-500/10 border-rose-500/20' : 'bg-emerald-500/10 border-emerald-500/20'
+      }`}>
+         <div className="flex items-center gap-3">
+             {checkingStatus ? <Loader2 className="animate-spin text-slate-500" size={20}/> : 
+              systemAlerts.length > 0 ? <AlertTriangle className="text-rose-500" size={20}/> : 
+              <CheckCircle className="text-emerald-500" size={20}/>}
+             
+             <div>
+                 <h3 className={`text-sm font-bold ${
+                     checkingStatus ? 'text-slate-500' :
+                     systemAlerts.length > 0 ? 'text-rose-400' : 'text-emerald-400'
+                 }`}>
+                     {checkingStatus ? 'Running Diagnostics...' : 
+                      systemAlerts.length > 0 ? 'Action Required' : 'System Nominal'}
+                 </h3>
+                 {!checkingStatus && systemAlerts.length === 0 && (
+                     <p className="text-xs text-slate-500">All recurring bills and debt settlements are up to date.</p>
+                 )}
+             </div>
+         </div>
+         {systemAlerts.length > 0 && (
+             <div className="text-right">
+                 <span className="text-xs font-bold bg-rose-500 text-white px-2 py-1 rounded-lg">{systemAlerts.length} Alerts</span>
+             </div>
+         )}
+      </div>
+
+      {/* EXPANDED ALERTS LIST */}
+      {systemAlerts.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-in slide-in-from-top-4 duration-500">
+              {systemAlerts.map(alert => (
+                  <div 
+                    key={alert.id} 
+                    onClick={() => navigate(alert.route)}
+                    className={`p-4 rounded-2xl border flex items-center gap-4 cursor-pointer hover:scale-[1.01] transition-transform ${
+                      alert.type === 'critical' 
+                        ? 'bg-rose-500/10 border-rose-500/20' 
+                        : 'bg-amber-500/10 border-amber-500/20'
+                    }`}
+                  >
+                      <div className={`p-2 rounded-xl ${alert.type === 'critical' ? 'bg-rose-500 text-white' : 'bg-amber-500 text-white'}`}>
+                          {alert.type === 'critical' ? <AlertTriangle size={18} /> : <Bell size={18} />}
+                      </div>
+                      <div>
+                          <h4 className={`text-sm font-bold ${alert.type === 'critical' ? 'text-rose-400' : 'text-amber-400'}`}>
+                              {alert.title}
+                          </h4>
+                          <p className="text-xs text-slate-300">{alert.message}</p>
+                      </div>
+                      <ChevronRight className="ml-auto text-slate-500" size={16} />
+                  </div>
+              ))}
+          </div>
+      )}
+
       {/* Premium Welcome Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div>

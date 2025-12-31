@@ -11,7 +11,8 @@ import {
   query, 
   where,
   limit,
-  orderBy
+  orderBy,
+  updateDoc
 } from 'firebase/firestore';
 import { 
   Receipt, 
@@ -23,97 +24,106 @@ import {
   X,
   Zap,
   PackageCheck,
-  FileText,
   RefreshCcw,
-  Search
+  Users,
+  CalendarClock
 } from 'lucide-react';
-import { Transaction, ExpenseTemplate, RecurringExpense } from '../types';
+import { Transaction, ExpenseTemplate, RecurringExpense, Contact } from '../types';
 
 export const Expenses: React.FC = () => {
-  const { profile } = useAuth();
-  const { accounts, transferFunds } = useAccounts();
+  // 1. Get 'transactions' from the global context (Just like Money Lab)
+  const { accounts, transferFunds, transactions } = useAccounts();
   
-  // Tabs: 'log' (Entry), 'recent' (History), 'pending' (IOUs), 'recurring' (Auto)
+  // Tabs
   const [activeTab, setActiveTab] = useState<'log' | 'recent' | 'pending' | 'recurring'>('log');
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   
-  const [templates, setTemplates] = useState<ExpenseTemplate[]>([]);
+  // Data State (We only need State for things NOT in the global context)
   const [recurring, setRecurring] = useState<RecurringExpense[]>([]);
-  const [pendingBills, setPendingBills] = useState<Transaction[]>([]);
-  const [recentExpenses, setRecentExpenses] = useState<Transaction[]>([]);
-  
+  const [templates, setTemplates] = useState<ExpenseTemplate[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+
   // Log Form State
   const [form, setForm] = useState({
     amount: '',
-    description: '',
+    contactId: '',
+    manualDescription: '',
     category: 'Operations',
     fromAccountId: 'till_float',
     saveAsTemplate: false,
     isRecurring: false,
     receiveStock: false,
-    frequency: 'MONTHLY' as any
+    frequency: 'MONTHLY' as any,
+    dueDateOffset: 7
   });
 
-  // Vendor Autocomplete
-  const uniqueVendors = useMemo(() => {
-    const vendors = new Set(recentExpenses.map(t => t.description));
-    return Array.from(vendors);
-  }, [recentExpenses]);
-
   // Modal State
-  const [settleModal, setSettleModal] = useState<Transaction | null>(null);
+  const [settleContactId, setSettleContactId] = useState<string | null>(null);
+  const [processRecurringModal, setProcessRecurringModal] = useState<RecurringExpense | null>(null);
+
+  // --- FIXED: USE MEMO INSTEAD OF FIRESTORE QUERY ---
+  
+  // 1. Pending Bills: Filter directly from global transactions (Matches Money Lab logic)
+  const pendingBills = useMemo(() => {
+    return transactions.filter(t => 
+      t.fromAccountId === 'pending_bills' && 
+      !t.isSettled
+    );
+  }, [transactions]);
+
+  // 2. Recent Expenses: Filter directly from global transactions
+  const recentExpenses = useMemo(() => {
+    return transactions
+      .filter(t => 
+        // Exclude system transfers, Shift opens/closes
+        !['Transfer', 'Shift Close', 'Shift Open', 'Internal Transfer', 'Settlement'].includes(t.category) &&
+        t.amount > 0 &&
+        // Ensure we don't show Pending Bills in "Recent" until they are paid? 
+        // Or show them? Usually recent log shows everything. 
+        // Let's exclude strictly internal moves.
+        t.fromAccountId !== 'pending_bills' 
+      )
+      .slice(0, 50); // Take top 50
+  }, [transactions]);
+
+  // Computed: Overdue Checks
+  const overdueCount = useMemo(() => 
+    pendingBills.filter(b => b.dueDate && Date.now() > b.dueDate).length, 
+  [pendingBills]);
+
+  const recurringDueCount = useMemo(() => 
+    recurring.filter(r => r.nextDueDate && r.nextDueDate <= Date.now() + 86400000).length,
+  [recurring]);
 
   useEffect(() => {
     let active = true;
 
-    // 1. Fetch Templates
+    // 1. Fetch Templates (Keep local fetch or move to context if desired)
     const unsubTemplates = onSnapshot(collection(db, getFullPath('expense_templates')), (snap) => {
       if (active) setTemplates(snap.docs.map(d => ({ ...d.data(), id: d.id } as ExpenseTemplate)));
     });
 
-    // 2. Fetch Recurring
+    // 2. Fetch Recurring (Keep local fetch)
     const unsubRecurring = onSnapshot(collection(db, getFullPath('recurring_expenses')), (snap) => {
       if (active) setRecurring(snap.docs.map(d => ({ ...d.data(), id: d.id } as RecurringExpense)));
     });
 
-    // 3. Fetch Pending Bills (Liabilities)
-    const unsubPending = onSnapshot(
-      query(collection(db, getFullPath('transactions')), where('fromAccountId', '==', 'pending_bills')),
-      (snap) => {
-        if (active) setPendingBills(snap.docs.map(d => ({ ...d.data(), id: d.id } as Transaction)));
+    // 3. Fetch Contacts
+    const unsubContacts = onSnapshot(collection(db, getFullPath('contacts')), (snap) => {
+      if (active) {
+        setContacts(snap.docs.map(d => ({ ...d.data(), id: d.id } as Contact)));
+        setLoading(false); // Data is ready
       }
-    );
+    });
 
-    // 4. Fetch Recent Expenses (FIXED: Removed complex 'where' clause to prevent Index Error hang)
-    const unsubRecent = onSnapshot(
-      query(
-        collection(db, getFullPath('transactions')), 
-        orderBy('date', 'desc'), 
-        limit(60) // Fetch slightly more to account for filtering
-      ),
-      (snap) => {
-        if (active) {
-          const allDocs = snap.docs.map(d => ({ ...d.data(), id: d.id } as Transaction));
-          // Filter client-side to avoid "Composite Index Missing" error
-          const filtered = allDocs.filter(t => t.category !== 'Transfer').slice(0, 50);
-          setRecentExpenses(filtered);
-          setLoading(false); // <--- This ensures the loading spinner stops
-        }
-      },
-      (error) => {
-        console.error("Error fetching recent expenses:", error);
-        // Ensure we stop loading even if there's an error
-        if (active) setLoading(false);
-      }
-    );
+    // REMOVED: unsubPending and unsubRecent (We use global context now)
 
     return () => {
       active = false;
       unsubTemplates();
       unsubRecurring();
-      unsubPending();
-      unsubRecent();
+      unsubContacts();
     };
   }, []);
 
@@ -121,66 +131,147 @@ export const Expenses: React.FC = () => {
     alert(`📦 STOCK MODULE CONNECTION:\n\nCreating inventory record for:\nItem: ${desc}\nCost: $${amount}\n\n(Redirecting to Stock Reception...)`);
   };
 
+  // Helper to find contact name
+  const getContactName = (id?: string) => contacts.find(c => c.id === id)?.name || 'Unknown Vendor';
+
   const handleLogExpense = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.amount || !form.description) return;
+    if (!form.amount || (!form.contactId && !form.manualDescription)) return;
     setActionLoading(true);
 
     try {
       const amountNum = Number(form.amount);
+      const contact = contacts.find(c => c.id === form.contactId);
+      const description = contact ? contact.name : form.manualDescription;
       
-      // 1. Execute Transfer
+      const isIOU = form.fromAccountId === 'pending_bills';
+      const dueDate = isIOU ? Date.now() + (form.dueDateOffset * 24 * 60 * 60 * 1000) : undefined;
+
+      // 1. Execute Transfer (or log Liability)
       await transferFunds(
         form.fromAccountId,
         'operational_expenses',
         amountNum,
-        form.description,
-        form.category
+        description,
+        form.category,
+        {
+          contactId: form.contactId,
+          isSettled: !isIOU, // If pending, it's NOT settled
+          dueDate: dueDate
+        }
       );
 
-      // 2. Templates
+      // 2. Save Template
       if (form.saveAsTemplate) {
         await addDoc(collection(db, getFullPath('expense_templates')), {
-          name: form.description,
+          name: description,
           amount: amountNum,
           category: form.category,
           fromAccountId: form.fromAccountId,
-          description: form.description
+          description: description
         });
       }
 
-      // 3. Recurring
+      // 3. Create Recurring Reminder (Not auto-deduct)
       if (form.isRecurring) {
         await addDoc(collection(db, getFullPath('recurring_expenses')), {
-          name: form.description,
-          amount: amountNum,
+          name: description,
+          amount: amountNum, // Default amount
           frequency: form.frequency,
           fromAccountId: form.fromAccountId,
           category: form.category,
-          description: form.description,
+          description: description,
+          contactId: form.contactId || null,
           isActive: true,
-          lastGenerated: Date.now()
+          nextDueDate: Date.now() + (30 * 24 * 60 * 60 * 1000) // Default next month
         });
       }
 
       // 4. Stock Trigger
       if (form.receiveStock) {
-        handleStockTrigger(form.description, amountNum);
+        handleStockTrigger(description, amountNum);
       } else {
-        alert("Expense logged successfully!");
+        alert(isIOU ? "Bill logged as Pending Payment (IOU)" : "Expense logged successfully!");
       }
 
       // Reset
       setForm({
+        ...form,
         amount: '',
-        description: '',
-        category: 'Operations',
-        fromAccountId: 'till_float',
-        saveAsTemplate: false,
-        isRecurring: false,
+        contactId: '',
+        manualDescription: '',
         receiveStock: false,
-        frequency: 'MONTHLY'
+        saveAsTemplate: false,
+        isRecurring: false
       });
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleProcessRecurring = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!processRecurringModal) return;
+    
+    const formData = new FormData(e.target as HTMLFormElement);
+    const amount = Number(formData.get('amount'));
+    
+    setActionLoading(true);
+    try {
+      // 1. Pay
+      await transferFunds(
+        processRecurringModal.fromAccountId,
+        'operational_expenses',
+        amount,
+        processRecurringModal.description,
+        processRecurringModal.category,
+        { contactId: processRecurringModal.contactId }
+      );
+
+      // 2. Update Next Due Date
+      const nextDate = new Date();
+      if (processRecurringModal.frequency === 'MONTHLY') nextDate.setMonth(nextDate.getMonth() + 1);
+      if (processRecurringModal.frequency === 'WEEKLY') nextDate.setDate(nextDate.getDate() + 7);
+      
+      await updateDoc(doc(db, getFullPath('recurring_expenses'), processRecurringModal.id), {
+        nextDueDate: nextDate.getTime()
+      });
+
+      setProcessRecurringModal(null);
+      alert("Recurring payment processed!");
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleSettleGroup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!settleContactId) return;
+    
+    const formData = new FormData(e.target as HTMLFormElement);
+    const source = formData.get('source') as string;
+    const billsToSettle = pendingBills.filter(b => b.contactId === settleContactId);
+    
+    setActionLoading(true);
+    try {
+      // Settle each bill
+      for (const bill of billsToSettle) {
+        await transferFunds(
+          source,
+          'pending_bills', // Moving money OUT of pending (liability reduction)
+          bill.amount,
+          `Settlement: ${bill.description}`,
+          'Debt Settlement'
+        );
+        // Mark original as settled
+        await updateDoc(doc(db, getFullPath('transactions'), bill.id), { isSettled: true });
+      }
+      setSettleContactId(null);
+      alert("All bills for this contact settled!");
     } catch (err: any) {
       alert(err.message);
     } finally {
@@ -192,34 +283,10 @@ export const Expenses: React.FC = () => {
     setForm({
       ...form,
       amount: t.amount.toString(),
-      description: t.description,
+      manualDescription: t.description,
       category: t.category,
       fromAccountId: t.fromAccountId
     });
-  };
-
-  const handleSettleBill = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!settleModal) return;
-    const formData = new FormData(e.target as HTMLFormElement);
-    const source = formData.get('source') as string;
-    
-    setActionLoading(true);
-    try {
-      await transferFunds(
-        source,
-        'pending_bills',
-        settleModal.amount,
-        `Settled: ${settleModal.description}`,
-        'Debt Settlement'
-      );
-      setSettleModal(null);
-      alert("Bill settled successfully!");
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setActionLoading(false);
-    }
   };
 
   const deleteTemplate = async (id: string) => {
@@ -230,6 +297,16 @@ export const Expenses: React.FC = () => {
 
   if (loading) return <div className="flex justify-center items-center py-20"><Loader2 className="animate-spin text-purple-400" size={40} /></div>;
 
+  // Group Pending Bills by Contact
+  const groupedPending = pendingBills.reduce((acc, bill) => {
+    const key = bill.contactId || 'unknown';
+    if (!acc[key]) acc[key] = { name: getContactName(bill.contactId), amount: 0, count: 0, bills: [] };
+    acc[key].amount += bill.amount;
+    acc[key].count += 1;
+    acc[key].bills.push(bill);
+    return acc;
+  }, {} as Record<string, { name: string, amount: number, count: number, bills: Transaction[] }>);
+
   return (
     <div className="max-w-6xl mx-auto space-y-8 animate-fade-in pb-12">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -238,14 +315,20 @@ export const Expenses: React.FC = () => {
             <Receipt className="text-rose-400" />
             Bills & Expenses
           </h1>
-          <p className="text-slate-400">Log costs, manage payables, and connect to inventory.</p>
+          <p className="text-slate-400">Log costs, manage payables, and track recurring bills.</p>
         </div>
+        {(overdueCount > 0 || recurringDueCount > 0) && (
+             <div className="flex gap-2">
+                {overdueCount > 0 && <div className="px-4 py-2 bg-rose-500/20 text-rose-400 rounded-xl text-xs font-bold border border-rose-500/20 flex items-center gap-2 animate-pulse"><AlertCircle size={14}/> {overdueCount} Overdue Bills</div>}
+                {recurringDueCount > 0 && <div className="px-4 py-2 bg-purple-500/20 text-purple-400 rounded-xl text-xs font-bold border border-purple-500/20 flex items-center gap-2"><CalendarClock size={14}/> {recurringDueCount} Due Recurring</div>}
+             </div>
+        )}
       </div>
 
       <div className="flex p-1.5 bg-slate-900/50 rounded-2xl w-fit border border-white/5 overflow-x-auto">
         <button onClick={() => setActiveTab('log')} className={`px-6 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${activeTab === 'log' ? 'bg-purple-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>Log Expense</button>
         <button onClick={() => setActiveTab('recent')} className={`px-6 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${activeTab === 'recent' ? 'bg-purple-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>Recent Activity</button>
-        <button onClick={() => setActiveTab('pending')} className={`px-6 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2 ${activeTab === 'pending' ? 'bg-purple-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>Pending {pendingBills.length > 0 && <span className="w-2 h-2 rounded-full bg-rose-400 animate-pulse" />}</button>
+        <button onClick={() => setActiveTab('pending')} className={`px-6 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2 ${activeTab === 'pending' ? 'bg-purple-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>Pending (IOUs)</button>
         <button onClick={() => setActiveTab('recurring')} className={`px-6 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${activeTab === 'recurring' ? 'bg-purple-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>Recurring</button>
       </div>
 
@@ -293,14 +376,20 @@ export const Expenses: React.FC = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Description / Vendor</label>
-                    <div className="relative group">
-                        <FileText size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-purple-400 transition-colors" />
-                        <input required list="vendor-suggestions" value={form.description} onChange={(e) => setForm({...form, description: e.target.value})} placeholder="e.g. Fresh Veggies Market" className="w-full bg-slate-900 border border-white/5 rounded-2xl pl-12 pr-4 py-3 text-white focus:ring-2 focus:ring-purple-500/50 outline-none" />
-                        <datalist id="vendor-suggestions">
-                            {uniqueVendors.map((v, i) => <option key={i} value={v} />)}
-                        </datalist>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Vendor / Contact</label>
+                    <div className="flex gap-2">
+                        <div className="relative flex-1 group">
+                            <Users size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-purple-400 transition-colors" />
+                            <select value={form.contactId} onChange={(e) => setForm({...form, contactId: e.target.value, manualDescription: ''})} className="w-full bg-slate-900 border border-white/5 rounded-2xl pl-12 pr-4 py-3 text-white focus:ring-2 focus:ring-purple-500/50 outline-none appearance-none">
+                                <option value="">-- Select Contact --</option>
+                                {contacts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                            </select>
+                        </div>
                     </div>
+                    {/* Fallback for one-off vendors */}
+                    {!form.contactId && (
+                        <input value={form.manualDescription} onChange={(e) => setForm({...form, manualDescription: e.target.value})} placeholder="Or type One-Off Vendor Name..." className="w-full bg-slate-900/50 border border-white/5 rounded-xl px-4 py-2 text-sm text-white focus:ring-1 focus:ring-purple-500/50 outline-none mt-2" />
+                    )}
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -322,61 +411,32 @@ export const Expenses: React.FC = () => {
                           <input type="checkbox" checked={form.receiveStock} onChange={(e) => setForm({...form, receiveStock: e.target.checked})} className="w-5 h-5 rounded-lg border-emerald-500/50 bg-emerald-500/10 text-emerald-500 focus:ring-0 focus:ring-offset-0 transition-all" />
                           <span className="text-sm text-emerald-400 font-bold group-hover:text-emerald-300 transition-colors flex items-center gap-2"><PackageCheck size={16} /> Receive into Inventory</span>
                        </label>
-                       <label className="flex items-center gap-3 cursor-pointer group">
-                          <input type="checkbox" checked={form.saveAsTemplate} onChange={(e) => setForm({...form, saveAsTemplate: e.target.checked})} className="w-5 h-5 rounded-lg border-white/10 bg-slate-900 text-purple-500 focus:ring-0 focus:ring-offset-0 transition-all" />
-                          <span className="text-xs text-slate-400 group-hover:text-white transition-colors">Save as Template</span>
-                       </label>
+                       {/* Only show 'Save Template' if not IOU */}
+                       {form.fromAccountId !== 'pending_bills' && (
+                         <label className="flex items-center gap-3 cursor-pointer group">
+                            <input type="checkbox" checked={form.saveAsTemplate} onChange={(e) => setForm({...form, saveAsTemplate: e.target.checked})} className="w-5 h-5 rounded-lg border-white/10 bg-slate-900 text-purple-500 focus:ring-0 focus:ring-offset-0 transition-all" />
+                            <span className="text-xs text-slate-400 group-hover:text-white transition-colors">Save as Template</span>
+                         </label>
+                       )}
                        <label className="flex items-center gap-3 cursor-pointer group">
                           <input type="checkbox" checked={form.isRecurring} onChange={(e) => setForm({...form, isRecurring: e.target.checked})} className="w-5 h-5 rounded-lg border-white/10 bg-slate-900 text-purple-500 focus:ring-0 focus:ring-offset-0 transition-all" />
-                          <span className="text-xs text-slate-400 group-hover:text-white transition-colors">Mark as Recurring</span>
+                          <span className="text-xs text-slate-400 group-hover:text-white transition-colors">Create Reminder</span>
                        </label>
                     </div>
                   </div>
 
-                  {form.isRecurring && (
-                    <div className="p-4 bg-purple-500/5 border border-purple-500/10 rounded-2xl animate-in slide-in-from-top-2 duration-300">
-                      <label className="text-[10px] font-bold text-purple-400 uppercase tracking-widest ml-1">Billing Cycle</label>
-                      <div className="flex gap-4 mt-2">
-                        {['DAILY', 'WEEKLY', 'MONTHLY'].map(freq => (
-                          <button 
-                            key={freq}
-                            type="button"
-                            onClick={() => setForm({...form, frequency: freq as any})}
-                            className={`flex-1 py-2 rounded-xl text-[10px] font-bold border transition-all ${form.frequency === freq ? 'bg-purple-500 text-white border-purple-500' : 'bg-slate-900 text-slate-500 border-white/5 hover:text-white'}`}
-                          >
-                            {freq}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                  {form.fromAccountId === 'pending_bills' && (
+                     <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl">
+                         <h4 className="text-xs font-bold text-rose-400 flex items-center gap-2 mb-1"><AlertCircle size={14} /> Payment Pending (IOU)</h4>
+                         <p className="text-[10px] text-slate-400">This will not deduct money now. A 7-day reminder will be set.</p>
+                     </div>
                   )}
 
                   <button disabled={actionLoading} type="submit" className="w-full py-5 gradient-purple rounded-3xl text-white font-bold shadow-xl shadow-purple-500/20 active:scale-95 transition-all flex items-center justify-center gap-3">
-                    {actionLoading ? <Loader2 className="animate-spin" size={24} /> : <Zap size={24} />} Log Operations Expense
+                    {actionLoading ? <Loader2 className="animate-spin" size={24} /> : <Zap size={24} />} 
+                    {form.fromAccountId === 'pending_bills' ? 'Record Payable Debt' : 'Log Expense'}
                   </button>
                 </form>
-              </div>
-
-              {/* Just Logged Section */}
-              <div className="px-4">
-                 <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Just Logged</h4>
-                 <div className="space-y-2">
-                    {recentExpenses.slice(0, 3).map(tx => (
-                        <div key={tx.id} className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5">
-                            <div className="flex items-center gap-3">
-                                <div className="p-2 bg-slate-900 rounded-lg text-slate-400"><Receipt size={14} /></div>
-                                <div>
-                                    <p className="text-sm font-bold text-white">{tx.description}</p>
-                                    <p className="text-[10px] text-slate-500">{tx.category}</p>
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                                <span className="text-sm font-bold text-rose-400">-${tx.amount}</span>
-                                <button onClick={() => handleStockTrigger(tx.description, tx.amount)} title="Receive Stock Check" className="p-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg transition-colors"><PackageCheck size={14} /></button>
-                            </div>
-                        </div>
-                    ))}
-                 </div>
               </div>
             </div>
 
@@ -393,15 +453,6 @@ export const Expenses: React.FC = () => {
                   ))}
                 </div>
               </div>
-              <div className="p-6 bg-blue-500/5 border border-blue-500/10 rounded-[2rem] flex items-start gap-4">
-                 <AlertCircle size={20} className="text-blue-400 shrink-0" />
-                 <div className="space-y-1">
-                   <p className="text-xs font-bold text-blue-400 uppercase tracking-widest">Expense Tip</p>
-                   <p className="text-[10px] text-slate-500 leading-relaxed italic">
-                     Use the "Receive into Inventory" checkbox for supplies. Use the "Receive Stock" button on recent transactions to link expenses to your inventory module after the fact.
-                   </p>
-                 </div>
-              </div>
             </div>
           </>
         )}
@@ -410,8 +461,7 @@ export const Expenses: React.FC = () => {
           <div className="lg:col-span-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
              <div className="glass rounded-[2rem] border border-white/10 overflow-hidden shadow-2xl">
               <div className="p-8 border-b border-white/5">
-                 <h2 className="text-xl font-bold text-white">Recent Activity & Stock Check</h2>
-                 <p className="text-xs text-slate-500 mt-1">Verify expenses and confirm stock arrival.</p>
+                 <h2 className="text-xl font-bold text-white">Recent Expenses</h2>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left">
@@ -420,7 +470,7 @@ export const Expenses: React.FC = () => {
                       <th className="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Date</th>
                       <th className="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Description</th>
                       <th className="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Amount</th>
-                      <th className="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Stock Actions</th>
+                      <th className="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
@@ -436,7 +486,7 @@ export const Expenses: React.FC = () => {
                         </td>
                         <td className="px-8 py-5 text-right">
                           <button onClick={() => handleStockTrigger(tx.description, tx.amount)} className="inline-flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-emerald-500 hover:text-white text-slate-400 text-xs font-bold rounded-xl transition-all border border-white/5">
-                            <PackageCheck size={14} /> Receive Stock
+                            <PackageCheck size={14} /> Stock
                           </button>
                         </td>
                       </tr>
@@ -450,50 +500,41 @@ export const Expenses: React.FC = () => {
 
         {activeTab === 'pending' && (
           <div className="lg:col-span-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <div className="glass rounded-[2rem] border border-white/10 overflow-hidden shadow-2xl">
-              <div className="p-8 border-b border-white/5 flex items-center justify-between">
-                 <div>
-                   <h2 className="text-xl font-bold text-white">Pending Settlements</h2>
-                   <p className="text-xs text-slate-500 mt-1">Liabilities needing liquidation.</p>
-                 </div>
-                 <div className="px-4 py-2 bg-rose-500/10 text-rose-400 rounded-full border border-rose-500/20 text-xs font-bold">
-                    Total: ${pendingBills.reduce((sum, b) => sum + b.amount, 0).toLocaleString()}
-                 </div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                  <thead>
-                    <tr className="bg-white/5">
-                      <th className="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Date</th>
-                      <th className="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Description</th>
-                      <th className="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Amount</th>
-                      <th className="px-8 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {pendingBills.map(bill => (
-                      <tr key={bill.id} className="hover:bg-white/5 transition-colors group">
-                        <td className="px-8 py-5 text-xs text-slate-400">{new Date(bill.date).toLocaleDateString()}</td>
-                        <td className="px-8 py-5">
-                          <p className="text-sm font-bold text-white">{bill.description}</p>
-                          <span className="text-[10px] text-slate-500 uppercase">{bill.category}</span>
-                        </td>
-                        <td className="px-8 py-5">
-                          <span className="text-sm font-bold text-rose-400">${bill.amount.toLocaleString()}</span>
-                        </td>
-                        <td className="px-8 py-5 text-right flex items-center justify-end gap-2">
-                          <button onClick={() => handleStockTrigger(bill.description, bill.amount)} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-emerald-400 rounded-xl transition-all" title="Verify Stock Received">
-                             <PackageCheck size={18} />
-                          </button>
-                          <button onClick={() => setSettleModal(bill)} className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold rounded-xl transition-all shadow-lg shadow-emerald-500/20 active:scale-95">
-                            Settle Now
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {Object.keys(groupedPending).map(key => {
+                    const group = groupedPending[key];
+                    const isOverdue = group.bills.some(b => b.dueDate && Date.now() > b.dueDate);
+                    return (
+                        <div key={key} className={`glass rounded-[2rem] p-6 border ${isOverdue ? 'border-rose-500/50 shadow-rose-900/20' : 'border-white/10'} shadow-lg`}>
+                            <div className="flex justify-between items-start mb-6">
+                                <div>
+                                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                        {group.name}
+                                        {isOverdue && <AlertCircle size={16} className="text-rose-500" />}
+                                    </h3>
+                                    <p className="text-xs text-slate-500">{group.count} Outstanding Bills</p>
+                                </div>
+                                <div className="text-right">
+                                    <p className="text-2xl font-black text-rose-400">${group.amount.toLocaleString()}</p>
+                                    <button onClick={() => setSettleContactId(key === 'unknown' ? null : key)} className="mt-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold rounded-xl transition-all shadow-lg shadow-emerald-500/20">
+                                        Settle All
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                {group.bills.map(b => (
+                                    <div key={b.id} className="flex justify-between items-center p-3 bg-slate-900/50 rounded-xl border border-white/5">
+                                        <div>
+                                            <p className="text-xs text-white font-bold">{b.description}</p>
+                                            <p className="text-[10px] text-slate-500">Due: {new Date(b.dueDate || 0).toLocaleDateString()}</p>
+                                        </div>
+                                        <span className="text-xs font-bold text-rose-400">${b.amount}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    );
+                })}
             </div>
           </div>
         )}
@@ -501,67 +542,79 @@ export const Expenses: React.FC = () => {
         {activeTab === 'recurring' && (
           <div className="lg:col-span-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {recurring.map(rec => (
-                <div key={rec.id} className="glass rounded-[2rem] p-6 border border-white/10 shadow-lg space-y-4">
-                  <div className="flex justify-between items-start">
-                    <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-400">
-                      <RefreshCcw size={20} />
+              {recurring.map(rec => {
+                  const isDue = rec.nextDueDate && rec.nextDueDate <= Date.now() + 86400000;
+                  return (
+                    <div key={rec.id} className={`glass rounded-[2rem] p-6 border ${isDue ? 'border-purple-500 shadow-purple-500/20' : 'border-white/10'} shadow-lg space-y-4`}>
+                      <div className="flex justify-between items-start">
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${isDue ? 'bg-purple-500 text-white animate-bounce' : 'bg-slate-800 text-slate-500'}`}>
+                          <CalendarClock size={20} />
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase">{rec.frequency}</span>
+                        </div>
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-white">{rec.name}</h3>
+                        <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-widest">Next Due: {new Date(rec.nextDueDate || Date.now()).toLocaleDateString()}</p>
+                      </div>
+                      <div className="pt-4 border-t border-white/5 flex gap-2">
+                         <button onClick={() => setProcessRecurringModal(rec)} className="flex-1 py-3 bg-purple-500 hover:bg-purple-600 text-white text-xs font-bold rounded-xl transition-all shadow-lg shadow-purple-500/20">
+                            Process Payment
+                         </button>
+                         <button onClick={() => deleteDoc(doc(db, getFullPath('recurring_expenses'), rec.id))} className="p-3 bg-slate-800 hover:bg-rose-500/20 hover:text-rose-400 text-slate-500 rounded-xl transition-all"><Trash2 size={16}/></button>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <span className="text-[10px] font-bold text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-lg border border-purple-500/10">{rec.frequency}</span>
-                    </div>
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-white">{rec.name}</h3>
-                    <p className="text-2xl font-black text-white mt-1">${rec.amount.toLocaleString()}</p>
-                    <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-widest">{rec.category}</p>
-                  </div>
-                  <div className="pt-4 border-t border-white/5 flex items-center justify-between text-[10px] text-slate-500 italic">
-                    <span>Active since {new Date(rec.lastGenerated || 0).toLocaleDateString()}</span>
-                    <button onClick={() => deleteDoc(doc(db, getFullPath('recurring_expenses'), rec.id))} className="text-rose-400 hover:text-rose-300"><Trash2 size={14} /></button>
-                  </div>
-                </div>
-              ))}
-              {recurring.length === 0 && (
-                <div className="col-span-full py-20 text-center text-slate-500 italic glass rounded-[2rem] border border-white/10">
-                   No recurring expenses established yet.
-                </div>
-              )}
+                  );
+              })}
             </div>
           </div>
         )}
       </div>
 
-      {settleModal && (
+      {/* MODAL: Settle Group */}
+      {settleContactId && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setSettleModal(null)} />
-          <div className="glass w-full max-w-md rounded-[2.5rem] p-8 md:p-10 shadow-2xl relative animate-in zoom-in-95 duration-200 overflow-hidden">
-             <div className="absolute top-0 left-0 right-0 h-1 bg-emerald-500" />
-             <div className="flex items-center justify-between mb-8">
-               <div className="flex items-center gap-4">
-                 <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 flex items-center justify-center text-emerald-400"><CheckCircle2 size={24} /></div>
-                 <div>
-                   <h2 className="text-2xl font-bold text-white">Settle Bill</h2>
-                   <p className="text-slate-400 text-sm">Clear this payable debt</p>
-                 </div>
-               </div>
-               <button onClick={() => setSettleModal(null)} className="text-slate-500 hover:text-white"><X size={24} /></button>
-             </div>
-             <div className="mb-8 p-4 bg-slate-900 rounded-2xl border border-white/5">
-                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Bill Details</p>
-                <p className="text-lg font-bold text-white">{settleModal.description}</p>
-                <p className="text-2xl font-black text-emerald-400 mt-2">${settleModal.amount.toLocaleString()}</p>
-             </div>
-             <form onSubmit={handleSettleBill} className="space-y-6">
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setSettleContactId(null)} />
+          <div className="glass w-full max-w-md rounded-[2.5rem] p-8 shadow-2xl relative animate-in zoom-in-95 duration-200">
+             <h2 className="text-xl font-bold text-white mb-6">Settle Account: {getContactName(settleContactId)}</h2>
+             <form onSubmit={handleSettleGroup} className="space-y-6">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Payment Source</label>
-                  <select name="source" required className="w-full bg-slate-900 border border-white/5 rounded-2xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500/50 outline-none">
-                    <option value="till_float">Till Cash (${accounts.find(a => a.id === 'till_float')?.balance})</option>
-                    <option value="business_bank">Business Bank (${accounts.find(a => a.id === 'business_bank')?.balance})</option>
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Pay From</label>
+                  <select name="source" required className="w-full bg-slate-900 border border-white/5 rounded-2xl px-4 py-3 text-white">
+                    <option value="till_float">Till Cash</option>
+                    <option value="business_bank">Business Bank</option>
                   </select>
                 </div>
-                <button disabled={actionLoading} type="submit" className="w-full py-4 bg-emerald-500 hover:bg-emerald-600 rounded-2xl text-white font-bold shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-2">
-                  {actionLoading ? <Loader2 className="animate-spin" size={20} /> : <Zap size={20} />} Complete Settlement
+                <button disabled={actionLoading} type="submit" className="w-full py-4 bg-emerald-500 rounded-2xl text-white font-bold">
+                  {actionLoading ? <Loader2 className="animate-spin" /> : 'Confirm Settlement'}
+                </button>
+             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Process Recurring */}
+      {processRecurringModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setProcessRecurringModal(null)} />
+          <div className="glass w-full max-w-md rounded-[2.5rem] p-8 shadow-2xl relative animate-in zoom-in-95 duration-200">
+             <h2 className="text-xl font-bold text-white mb-2">Process Recurring Bill</h2>
+             <p className="text-slate-400 text-sm mb-6">Confirm the actual amount for this period.</p>
+             
+             <form onSubmit={handleProcessRecurring} className="space-y-6">
+                <div className="p-4 bg-slate-900 rounded-2xl border border-white/5">
+                   <p className="text-sm font-bold text-white">{processRecurringModal.name}</p>
+                   <p className="text-xs text-slate-500 uppercase">{processRecurringModal.category}</p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Actual Amount Due</label>
+                  <input name="amount" type="number" step="0.01" defaultValue={processRecurringModal.amount} className="w-full bg-slate-900 border border-white/5 rounded-2xl px-4 py-3 text-white text-xl font-bold" />
+                </div>
+
+                <button disabled={actionLoading} type="submit" className="w-full py-4 bg-purple-500 rounded-2xl text-white font-bold">
+                  {actionLoading ? <Loader2 className="animate-spin" /> : 'Confirm & Pay'}
                 </button>
              </form>
           </div>

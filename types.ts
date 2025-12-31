@@ -1,4 +1,3 @@
-
 export type UserRole = 'ADMIN' | 'MANAGER' | 'STAFF';
 
 export interface UserProfile {
@@ -17,6 +16,18 @@ export interface Account {
   type: AccountType;
   balance: number;
   icon: string;
+}
+
+// NEW: Contact Interface for Vendors/Suppliers
+export interface Contact {
+  id: string;
+  name: string;
+  type: 'VENDOR' | 'SUPPLIER' | 'OTHER';
+  phone?: string;
+  email?: string;
+  defaultCategory?: string; // Helper to auto-fill category
+  taxId?: string;
+  notes?: string;
 }
 
 export interface Customer {
@@ -38,9 +49,14 @@ export interface Transaction {
   category: string;
   createdBy: string;
   receiptUrl?: string;
-  isSettled?: boolean;
+  
+  // Updated for Pending/IOU Workflow
+  isSettled?: boolean;      // False if "Payment Pending"
+  dueDate?: number;         // Date when the payment is due (for 7-day alerts)
+  contactId?: string;       // Link to the Contact (Vendor)
+  
   staffId?: string;
-  customerId?: string; // Link for Credit Bills
+  customerId?: string;      // Link for Credit Bills (Receivables)
   notes?: string;
 }
 
@@ -114,11 +130,19 @@ export interface ExpenseTemplate {
 export interface RecurringExpense {
   id: string;
   name: string;
-  amount: number;
+  // Amount is now optional or treated as a "Default Estimate" since actuals vary
+  amount: number; 
   frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY';
+  
+  // Configuration for Auto-Filling the Payment Modal
   fromAccountId: string;
   category: string;
   description: string;
-  lastGenerated?: number;
+  
+  // Logic for Reminders
+  nextDueDate: number; // The specific date the next bill is expected
   isActive: boolean;
+  
+  // Removed strict automation fields like 'lastGenerated' if they are no longer used for auto-deduction
+  contactId?: string; // Optional link to vendor
 }
