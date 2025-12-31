@@ -106,6 +106,26 @@ export const Staff: React.FC = () => {
     }
     return days;
   }, [periodRange]);
+  const daysInMonth = useMemo(() => {
+    const year = currentMonth.getFullYear();
+    const month = currentMonth.getMonth();
+    
+    // Get the first day of the month (0 = Sunday, 1 = Monday, etc.)
+    const firstDayOfMonth = new Date(year, month, 1).getDay();
+    
+    // Get the number of days in the specific month
+    const daysInCurrentMonth = new Date(year, month + 1, 0).getDate();
+    
+    // Create array with padding for days before the 1st
+    const days: (Date | null)[] = Array(firstDayOfMonth).fill(null);
+    
+    // Add actual days
+    for (let i = 1; i <= daysInCurrentMonth; i++) {
+      days.push(new Date(year, month, i));
+    }
+    
+    return days;
+  }, [currentMonth]);
 
   const getLeaveCount = (staffId: string) => {
     const { startDate, endDate } = periodRange;
@@ -406,141 +426,163 @@ export const Staff: React.FC = () => {
       )}
 
       {/* --- HOLIDAYS TAB --- */}
-      {activeTab === 'holidays' && (
-
-<div className="glass rounded-[1.5rem] md:rounded-[2.5rem] p-4 md:p-8 border border-white/10 shadow-2xl">
-
-  <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
-
-    <h2 className="text-xl font-bold text-white">Holiday Planner</h2>
-
-    <div className="flex items-center justify-between gap-4 bg-slate-900/50 p-1 rounded-2xl border border-white/5 w-full md:w-auto">
-
-       <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))} className="p-2 hover:bg-white/5 rounded-xl text-slate-400"><ChevronLeft size={20} /></button>
-
-       <span className="text-sm font-bold text-white min-w-[120px] text-center">
-
-         {currentMonth.toLocaleDateString([], { month: 'long', year: 'numeric' })}
-
-       </span>
-
-       <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))} className="p-2 hover:bg-white/5 rounded-xl text-slate-400"><ChevronRight size={20} /></button>
-
-    </div>
-
-  </div>
-
-
-
-  {/* Adjusted Grid: gap-1 on mobile, gap-4 on desktop */}
-
-  <div className="grid grid-cols-7 gap-1 md:gap-4">
-
-     {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
-
-       <div key={d} className="text-center text-[8px] md:text-[10px] font-bold text-slate-500 uppercase tracking-widest py-2">{d}</div>
-
-     ))}
-
-     {daysInMonth.map((date, idx) => {
-
-       if (!date) return <div key={`pad-${idx}`} />;
-
-       const dateStr = date.toISOString().split('T')[0];
-
-       const dayHolidays = holidays.filter(h => h.date === dateStr);
-
-       
-
-       return (
-
-         <div key={dateStr} className="aspect-square glass rounded-lg md:rounded-2xl border border-white/5 p-1 md:p-2 flex flex-col gap-1 relative group hover:border-purple-500/30 transition-all cursor-default">
-
-           <span className="text-[10px] md:text-xs font-bold text-slate-400 mb-0.5 md:mb-1">{date.getDate()}</span>
-
-           
-
-           {/* Dots Container: Tighter packing for mobile */}
-
-           <div className="flex flex-wrap content-start gap-0.5 md:gap-1">
-
-              {dayHolidays.map(h => {
-
-                const s = staff.find(sm => sm.id === h.staffId);
-
-                return (
-
-                  <div key={h.id} title={s?.name} className="w-1.5 h-1.5 md:w-2 md:h-2 rounded-full shadow-sm" style={{ backgroundColor: s?.color }} />
-
-                );
-
-              })}
-
-           </div>
-
-           
-
-           {/* Hover Interaction Overlay */}
-
-           <div className="absolute inset-0 bg-slate-900/95 rounded-lg md:rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity flex flex-wrap items-center justify-center p-1 md:p-2 gap-1 z-20 content-center">
-
-              {staff.map(s => {
-
-                const active = dayHolidays.some(h => h.staffId === s.id);
-
-                return (
-
-                  <button 
-
-                    key={s.id} 
-
-                    onClick={() => toggleHoliday(s.id, dateStr)}
-
-                    title={s.name}
-
-                    className={`w-5 h-5 md:w-6 md:h-6 rounded-md md:rounded-lg flex items-center justify-center transition-all ${active ? 'shadow-lg scale-110' : 'bg-white/5 opacity-50 hover:opacity-100'}`}
-
-                    style={{ backgroundColor: active ? s.color : undefined }}
-
+{/* --- HOLIDAYS TAB (UPDATED) --- */}
+{/* --- HOLIDAYS TAB --- */}
+{/* --- HOLIDAYS TAB --- */}
+{activeTab === 'holidays' && (
+        <div className="flex flex-col lg:flex-row gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          
+          {/* 1. SELECTION PANEL (Left) */}
+          <div className="lg:w-80 space-y-4">
+            <div className="glass rounded-[2rem] p-6 border border-white/10 shadow-xl h-fit">
+              <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                <UserCheck className="text-purple-400" size={20} /> 
+                Select Staff
+              </h3>
+              <p className="text-xs text-slate-400 mb-4 leading-relaxed">
+                Click a team member to manage their schedule. Then click dates on the calendar to toggle holidays.
+              </p>
+              
+              <div className="grid grid-cols-1 gap-2 max-h-[500px] overflow-y-auto custom-scrollbar pr-1">
+                {staff.map(s => (
+                  <button
+                    key={s.id}
+                    onClick={() => setSelectedStaffForHoliday(s.id === selectedStaffForHoliday ? '' : s.id)}
+                    className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all text-left group ${
+                      selectedStaffForHoliday === s.id 
+                        ? 'bg-purple-500/20 border-purple-500 text-white shadow-lg shadow-purple-500/10' 
+                        : 'bg-slate-900/40 border-white/5 text-slate-400 hover:bg-white/5 hover:text-white'
+                    }`}
                   >
-
-                    <Heart size={8} className={`md:w-3 md:h-3 ${active ? 'text-white' : 'text-slate-400'}`} />
-
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs text-white shadow-sm ring-2 ring-transparent group-hover:ring-white/20 transition-all" style={{ backgroundColor: s.color }}>
+                      {s.name[0]}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-xs uppercase tracking-wide truncate">{s.name}</p>
+                      <p className="text-[10px] opacity-60 truncate">{s.role}</p>
+                    </div>
+                    {selectedStaffForHoliday === s.id && <CheckCircle2 size={16} className="text-purple-400" />}
                   </button>
+                ))}
+              </div>
+            </div>
 
+            {/* Legend */}
+            <div className="glass rounded-[1.5rem] p-5 border border-white/10 flex flex-col gap-3">
+               <div className="flex items-center gap-2">
+                 <div className="w-3 h-3 rounded-full bg-slate-500 opacity-50"></div>
+                 <span className="text-[10px] uppercase font-bold text-slate-400">Other Staff Off</span>
+               </div>
+               <div className="flex items-center gap-2">
+                 <div className="w-3 h-3 rounded-full border-2 border-white bg-purple-500"></div>
+                 <span className="text-[10px] uppercase font-bold text-slate-400">Selected Staff Off</span>
+               </div>
+            </div>
+          </div>
+
+          {/* 2. CYCLE VIEW (Right) */}
+          <div className="flex-1 glass rounded-[2.5rem] p-4 md:p-8 border border-white/10 shadow-2xl">
+            
+            {/* Header: Controls the 15th-14th Cycle */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+              <div>
+                <h2 className="text-xl font-bold text-white">
+                  {selectedStaffForHoliday 
+                    ? `Editing: ${staff.find(s => s.id === selectedStaffForHoliday)?.name}` 
+                    : 'Overview Mode'}
+                </h2>
+                <p className="text-xs text-slate-400 mt-1">
+                   Managing Cycle ending in {currentMonth.toLocaleDateString([], { month: 'long' })}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 bg-slate-900/50 p-1 rounded-2xl border border-white/5 self-start sm:self-auto">
+                <button 
+                  onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))} 
+                  className="p-2 hover:bg-white/5 rounded-xl text-slate-400 transition-colors"
+                >
+                  <ChevronLeft size={20} />
+                </button>
+                
+                {/* THE KEY CHANGE: Shows "Dec 15 - Jan 14" instead of "January" */}
+                <span className="text-sm font-bold text-white min-w-[140px] text-center">
+                  {periodRange.startDate.toLocaleDateString('default', { month: 'short', day: 'numeric' })} - {periodRange.endDate.toLocaleDateString('default', { month: 'short', day: 'numeric' })}
+                </span>
+                
+                <button 
+                  onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))} 
+                  className="p-2 hover:bg-white/5 rounded-xl text-slate-400 transition-colors"
+                >
+                  <ChevronRight size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* Grid: Shows strictly the days in the cycle */}
+            <div className="grid grid-cols-7 gap-2 md:gap-3">
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                <div key={d} className="text-center text-[9px] md:text-[10px] font-bold text-slate-500 uppercase tracking-widest py-2">{d}</div>
+              ))}
+
+              {/* 1. Padding: Empty slots to align the 15th to the correct weekday */}
+              {Array.from({ length: daysInPeriod[0].getDay() }).map((_, i) => (
+                 <div key={`pad-start-${i}`} className="hidden md:block" />
+              ))}
+
+              {/* 2. Days: Renders strictly 15th -> 14th */}
+              {daysInPeriod.map((date) => {
+                const dateStr = date.toISOString().split('T')[0];
+                const dayHolidays = holidays.filter(h => h.date === dateStr);
+                
+                // Logic to check if the CURRENTLY SELECTED staff is off
+                const isSelectedStaffOff = selectedStaffForHoliday && dayHolidays.some(h => h.staffId === selectedStaffForHoliday);
+                
+                return (
+                  <div 
+                    key={dateStr}
+                    onClick={() => selectedStaffForHoliday ? toggleHoliday(selectedStaffForHoliday, dateStr) : null}
+                    className={`
+                      aspect-square rounded-xl md:rounded-2xl p-1.5 md:p-2 flex flex-col justify-between transition-all border relative overflow-hidden
+                      ${selectedStaffForHoliday 
+                          ? 'cursor-pointer hover:border-purple-500/50 hover:bg-purple-500/5 active:scale-95' 
+                          : 'cursor-not-allowed opacity-60 grayscale-[0.5]'}
+                      ${isSelectedStaffOff 
+                          ? 'bg-rose-500/10 border-rose-500/40' 
+                          : 'bg-slate-900/40 border-white/5'}
+                    `}
+                  >
+                    <div className="flex justify-between items-start z-10">
+                       <span className={`text-[10px] md:text-xs font-bold ${isSelectedStaffOff ? 'text-rose-400' : 'text-slate-500'}`}>
+                         {date.getDate()}
+                       </span>
+                       {isSelectedStaffOff && <Heart size={10} className="text-rose-500 fill-rose-500" />}
+                    </div>
+                    
+                    {/* Dots for staff currently on holiday */}
+                    <div className="flex flex-wrap content-end gap-1 z-10">
+                       {dayHolidays.map(h => {
+                          const s = staff.find(sm => sm.id === h.staffId);
+                          if (!s) return null;
+                          
+                          const isSelected = s.id === selectedStaffForHoliday;
+                          
+                          return (
+                             <div 
+                               key={h.id} 
+                               title={s.name}
+                               className={`rounded-full transition-all shadow-sm ${isSelected ? 'w-2 h-2 md:w-2.5 md:h-2.5 ring-2 ring-slate-900 z-20' : 'w-1.5 h-1.5 md:w-2 md:h-2 opacity-60'}`}
+                               style={{ backgroundColor: s.color }}
+                             />
+                          );
+                       })}
+                    </div>
+                  </div>
                 );
-
               })}
-
-           </div>
-
-         </div>
-
-       );
-
-     })}
-
-  </div>
-
-  <div className="mt-6 md:mt-8 flex gap-3 md:gap-4 flex-wrap justify-center md:justify-start">
-
-     {staff.map(s => (
-
-       <div key={s.id} className="flex items-center gap-1.5 text-[9px] md:text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-900/50 px-2 py-1 rounded-lg border border-white/5">
-
-         <div className="w-1.5 h-1.5 md:w-2 md:h-2 rounded-full" style={{ backgroundColor: s.color }} />
-
-         {s.name}
-
-       </div>
-
-     ))}
-
-  </div>
-
-</div>
-
-)}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* --- PAYROLL TAB --- */}
       {activeTab === 'payroll' && (
