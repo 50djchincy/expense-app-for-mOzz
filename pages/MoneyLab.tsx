@@ -317,6 +317,16 @@ export const MoneyLab: React.FC = () => {
           <p className="text-slate-400 mt-1">Manage core liquidity and internal fund movements.</p>
         </div>
         <div className="flex items-center gap-3">
+          {/* [NEW]: Internal Transfer Button */}
+          <button 
+            onClick={() => setShowTransferModal(true)}
+            className="flex items-center justify-center gap-2 px-6 py-4 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 rounded-2xl font-bold border border-purple-500/10 active:scale-95 transition-all shadow-neumorphic"
+          >
+            <ArrowRightLeft size={20} />
+            Transfer
+          </button>
+
+          {/* Existing Buttons */}
           <button 
             onClick={() => setShowClientDebtModal(true)}
             className="flex items-center justify-center gap-2 px-6 py-4 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-2xl font-bold border border-emerald-500/10 active:scale-95 transition-all shadow-neumorphic"
@@ -324,6 +334,8 @@ export const MoneyLab: React.FC = () => {
             <User size={20} />
             Client Debt
           </button>
+          
+          {/* ... Card Recon button continues below ... */}
           <button 
             onClick={() => setShowReconModal(true)}
             className="flex items-center justify-center gap-2 px-6 py-4 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-2xl font-bold border border-blue-500/10 active:scale-95 transition-all shadow-neumorphic"
@@ -382,7 +394,7 @@ export const MoneyLab: React.FC = () => {
             Payables & Reserves
           </h2>
           <div className="grid grid-cols-1 gap-4">
-            {accounts.filter(a => a.type === 'LIABILITY' || a.type === 'EXPENSE').map(acc => (
+          {accounts.filter(a => a.type === 'LIABILITY' || a.type === 'EXPENSE' || a.type === 'EQUITY').map(acc => (
               <AccountCard 
                 key={acc.id} 
                 account={acc} 
