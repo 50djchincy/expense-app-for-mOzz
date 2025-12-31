@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAccounts } from '../AccountsContext';
 import { useAuth } from '../AuthContext';
@@ -13,11 +12,12 @@ import {
   query, 
   where, 
   deleteDoc,
-  getDocs
+  getDocs,
+  increment // Added increment
 } from 'firebase/firestore';
 import { 
   Users, 
-  Calendar, 
+  Calendar as CalendarIcon, 
   Banknote, 
   Plus, 
   X, 
@@ -27,16 +27,14 @@ import {
   ChevronLeft, 
   ChevronRight, 
   Heart,
-  TrendingUp,
-  History,
   Zap,
   CheckCircle2,
-  DollarSign,
-  Wallet,
-  ArrowRight,
   Briefcase,
-  ArrowDownCircle,
-  Building
+  ArrowRight,
+  UserCheck,
+  Wallet,
+  AlertCircle,
+  CreditCard // Added CreditCard icon
 } from 'lucide-react';
 import { StaffMember, HolidayRecord, Transaction } from '../types';
 
@@ -56,8 +54,8 @@ interface PayrollConfig {
 
 export const Staff: React.FC = () => {
   const { profile } = useAuth();
-  const { accounts, transferFunds } = useAccounts();
-  const [activeTab, setActiveTab] = useState<'roster' | 'holidays' | 'payroll'>('roster');
+  const { accounts, transferFunds, transactions } = useAccounts();
+  const [activeTab, setActiveTab] = useState<'directory' | 'holidays' | 'payroll'>('directory');
   const [loading, setLoading] = useState(true);
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [holidays, setHolidays] = useState<HolidayRecord[]>([]);
@@ -65,10 +63,12 @@ export const Staff: React.FC = () => {
 
   // Calendar State
   const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [selectedStaffForHoliday, setSelectedStaffForHoliday] = useState<string>('');
 
   // Modal States
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [showAdvanceModal, setShowAdvanceModal] = useState<StaffMember | null>(null);
+  const [showLoanModal, setShowLoanModal] = useState<StaffMember | null>(null); // Added Loan Modal State
   const [payrollConfig, setPayrollConfig] = useState<PayrollConfig | null>(null);
 
   useEffect(() => {
@@ -87,6 +87,34 @@ export const Staff: React.FC = () => {
     };
   }, []);
 
+  // --- Date Range Logic (15th to 14th) ---
+  const periodRange = useMemo(() => {
+    const year = currentMonth.getFullYear();
+    const month = currentMonth.getMonth();
+    const startDate = new Date(year, month - 1, 15);
+    const endDate = new Date(year, month, 14);
+    return { startDate, endDate };
+  }, [currentMonth]);
+
+  const daysInPeriod = useMemo(() => {
+    const days: Date[] = [];
+    const { startDate, endDate } = periodRange;
+    const curr = new Date(startDate);
+    while (curr <= endDate) {
+      days.push(new Date(curr));
+      curr.setDate(curr.getDate() + 1);
+    }
+    return days;
+  }, [periodRange]);
+
+  const getLeaveCount = (staffId: string) => {
+    const { startDate, endDate } = periodRange;
+    return holidays.filter(h => {
+        const hDate = new Date(h.date);
+        return h.staffId === staffId && hDate >= startDate && hDate <= endDate;
+    }).length;
+  };
+
   const handleAddStaff = async (e: React.FormEvent) => {
     e.preventDefault();
     const formData = new FormData(e.target as HTMLFormElement);
@@ -99,7 +127,7 @@ export const Staff: React.FC = () => {
         role: formData.get('role'),
         salary: Number(formData.get('salary')),
         loanBalance: Number(formData.get('loanBalance')) || 0,
-        loanInstallment: Number(formData.get('loanInstallment')) || 0,
+        loanInstallment: 0,
         color: COLORS[staff.length % COLORS.length],
         isActive: true,
         joinedAt: Date.now()
@@ -130,7 +158,47 @@ export const Staff: React.FC = () => {
         { staffId: showAdvanceModal.id }
       );
       setShowAdvanceModal(null);
-      alert("Advance issued successfully. This will be deducted in the next payroll cycle.");
+      alert("Advance issued successfully.");
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // --- NEW: Handle Giving Loans ---
+  const handleGiveLoan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!showLoanModal) return;
+    const formData = new FormData(e.target as HTMLFormElement);
+    const amount = Number(formData.get('amount'));
+    const source = formData.get('source') as string;
+    const notes = formData.get('notes') as string;
+
+    if (amount <= 0) {
+      alert("Amount must be positive.");
+      return;
+    }
+
+    setActionLoading(true);
+    try {
+      // 1. Move money from Bank to 'Staff Receivables' (Asset)
+      await transferFunds(
+        source,
+        'staff_advances_rec', 
+        amount,
+        `Loan to ${showLoanModal.name}: ${notes}`,
+        'Staff Loan', 
+        { staffId: showLoanModal.id }
+      );
+
+      // 2. Update the Staff Member's loanBalance field
+      await updateDoc(doc(db, getFullPath('staff'), showLoanModal.id), {
+        loanBalance: increment(amount)
+      });
+
+      setShowLoanModal(null);
+      alert("Loan issued successfully.");
     } catch (err: any) {
       alert(err.message);
     } finally {
@@ -139,6 +207,8 @@ export const Staff: React.FC = () => {
   };
 
   const toggleHoliday = async (staffId: string, dateStr: string) => {
+    if (!staffId) return; 
+    
     const existing = holidays.find(h => h.staffId === staffId && h.date === dateStr);
     try {
       if (existing) {
@@ -154,50 +224,50 @@ export const Staff: React.FC = () => {
     }
   };
 
-  const daysInMonth = useMemo(() => {
-    const year = currentMonth.getFullYear();
-    const month = currentMonth.getMonth();
-    const firstDay = new Date(year, month, 1).getDay();
-    const days = new Date(year, month + 1, 0).getDate();
-    
-    const calendar = [];
-    for (let i = 0; i < firstDay; i++) calendar.push(null);
-    for (let i = 1; i <= days; i++) calendar.push(new Date(year, month, i));
-    
-    return calendar;
-  }, [currentMonth]);
+  // --- Helper: Calculate Outstanding Advances for UI ---
+  const getOutstandingAdvances = (staffId: string) => {
+    const staffTxs = transactions.filter(t => 
+      (t as any).staffId === staffId && 
+      ['Staff Advance', 'Staff Payroll Internal'].includes(t.category) &&
+      t.isSettled
+    );
+    const issued = staffTxs.filter(t => t.category === 'Staff Advance').reduce((acc, t) => acc + t.amount, 0);
+    const cleared = staffTxs.filter(t => t.category === 'Staff Payroll Internal').reduce((acc, t) => acc + t.amount, 0);
+    return Math.max(0, issued - cleared);
+  };
 
-  const initiatePayroll = async (staffId: string, type: 'SALARY' | 'SERVICE_CHARGE') => {
+  const initiatePayroll = (staffId: string, type: 'SALARY' | 'SERVICE_CHARGE') => {
     const s = staff.find(sm => sm.id === staffId);
     if (!s) return;
 
-    setActionLoading(true);
-    try {
-      // Fetch advances
-      const q = query(
-        collection(db, getFullPath('transactions')),
-        where('staffId', '==', staffId),
-        where('category', '==', 'Staff Advance'),
-        where('isSettled', '==', true)
-      );
-      const advSnap = await getDocs(q);
-      const advancesTotal = advSnap.docs
-        .map(d => d.data() as Transaction)
-        .reduce((sum, d) => sum + d.amount, 0);
+    // Filter transactions (only 'Staff Advance' is auto-deducted)
+    const staffTxs = transactions.filter(t => 
+      (t as any).staffId === staffId && 
+      ['Staff Advance', 'Staff Payroll Internal'].includes(t.category) &&
+      t.isSettled
+    );
 
-      setPayrollConfig({
-        staff: s,
-        type,
-        baseAmount: type === 'SALARY' ? s.salary : 0,
-        advancesTotal,
-        loanRepayment: type === 'SALARY' ? Math.min(s.loanInstallment, s.loanBalance) : 0,
-        sourceId: 'business_bank'
-      });
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setActionLoading(false);
-    }
+    let totalIssued = 0;
+    let totalCleared = 0;
+
+    staffTxs.forEach(tx => {
+       if (tx.category === 'Staff Advance') {
+          totalIssued += tx.amount;
+       } else if (tx.category === 'Staff Payroll Internal') {
+          totalCleared += tx.amount;
+       }
+    });
+
+    const outstandingAdvances = Math.max(0, totalIssued - totalCleared);
+
+    setPayrollConfig({
+      staff: s,
+      type,
+      baseAmount: type === 'SALARY' ? s.salary : 0,
+      advancesTotal: outstandingAdvances,
+      loanRepayment: 0,
+      sourceId: 'business_bank'
+    });
   };
 
   const confirmPayout = async () => {
@@ -206,13 +276,13 @@ export const Staff: React.FC = () => {
     
     const netPay = baseAmount - advancesTotal - loanRepayment;
     if (netPay < 0) {
-      alert("Net payout cannot be negative. Adjust loan repayment or base amount.");
+      alert("Net payout cannot be negative.");
       return;
     }
 
     setActionLoading(true);
     try {
-      // 1. Pay Net Amount: Source -> Payroll Expense
+      // 1. Pay Net Amount
       if (netPay > 0) {
         await transferFunds(
           sourceId,
@@ -224,39 +294,35 @@ export const Staff: React.FC = () => {
         );
       }
 
-      // 2. Clear Advances: Advances Rec -> Payroll Expense (Internal Reversal)
+      // 2. Clear Advances
       if (advancesTotal > 0) {
         await transferFunds(
           'staff_advances_rec',
           'payroll_expenses',
           advancesTotal,
-          `Clearing Advances for ${s.name} via Payroll`,
+          `Clearing Advances for ${s.name}`,
           'Staff Payroll Internal',
           { staffId: s.id }
         );
       }
 
-      // 3. Clear Loan Repayment portion (if any)
+      // 3. Loan Repayment
+      // FIXED: Moves from 'staff_advances_rec' to Expense to cancel the debt asset
       if (loanRepayment > 0) {
-        // Logically the repayment is money the staff "gave back" from their salary
-        // So we reduce the payout and move that amount to reduce the Staff Advance Receivable (or a loan asset)
-        // For simplicity here, we just transfer it from Source to Payroll Expense as if part of salary, 
-        // then reduce the loan balance on the staff object.
         await transferFunds(
-          sourceId,
+          'staff_advances_rec', 
           'payroll_expenses',
           loanRepayment,
           `Loan Repayment: ${s.name}`,
           'Staff Loan Repayment',
           { staffId: s.id }
         );
-        
         await updateDoc(doc(db, getFullPath('staff'), s.id), {
           loanBalance: Math.max(0, s.loanBalance - loanRepayment)
         });
       }
 
-      alert(`Payroll processed for ${s.name}. Advances cleared and loan updated.`);
+      alert(`Payroll processed for ${s.name}.`);
       setPayrollConfig(null);
     } catch (err: any) {
       alert(err.message);
@@ -275,142 +341,218 @@ export const Staff: React.FC = () => {
             <Users className="text-purple-400" />
             Staff Hub
           </h1>
-          <p className="text-slate-400">Advances, Holidays & Advanced Payroll Engine.</p>
+          <p className="text-slate-400">Manage team directory, attendance & payroll.</p>
         </div>
         <div className="flex bg-slate-900/50 p-1 rounded-2xl border border-white/5">
-          <button onClick={() => setActiveTab('roster')} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activeTab === 'roster' ? 'bg-purple-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>Roster</button>
+          <button onClick={() => setActiveTab('directory')} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activeTab === 'directory' ? 'bg-purple-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>Directory</button>
           <button onClick={() => setActiveTab('holidays')} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activeTab === 'holidays' ? 'bg-purple-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>Holidays</button>
           <button onClick={() => setActiveTab('payroll')} className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${activeTab === 'payroll' ? 'bg-purple-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}>Payroll</button>
         </div>
       </div>
 
-      {activeTab === 'roster' && (
-        <div className="space-y-6">
+      {/* --- DIRECTORY TAB --- */}
+      {activeTab === 'directory' && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
           <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold text-white">Employee Management</h2>
+            <div className="flex items-center gap-4">
+               <h2 className="text-xl font-bold text-white">Employee Directory</h2>
+               <div className="px-3 py-1 bg-slate-800 rounded-lg text-[10px] font-bold text-slate-400 uppercase tracking-widest border border-white/5">
+                  Cycle: {periodRange.startDate.getDate()} {periodRange.startDate.toLocaleString('default', { month: 'short' })} - {periodRange.endDate.getDate()} {periodRange.endDate.toLocaleString('default', { month: 'short' })}
+               </div>
+            </div>
             <button onClick={() => setShowAddStaff(true)} className="px-4 py-2 gradient-purple rounded-xl text-white text-xs font-bold flex items-center gap-2 active:scale-95 transition-all shadow-lg shadow-purple-500/20"><Plus size={16} /> New Staff</button>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {staff.map(s => (
               <div key={s.id} className="glass rounded-[2rem] p-6 border border-white/10 shadow-lg relative overflow-hidden group">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl opacity-10 group-hover:opacity-20 transition-opacity" style={{ backgroundImage: `linear-gradient(to bottom left, ${s.color}, transparent)` }} />
+                
                 <div className="flex items-center gap-4 mb-6 relative z-10">
                   <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-white font-bold text-xl shadow-lg" style={{ backgroundColor: s.color }}>{s.name[0]}</div>
                   <div>
                     <h3 className="font-bold text-white text-lg leading-tight">{s.name}</h3>
                     <div className="flex items-center gap-2 mt-1">
-                       <span className="text-[10px] font-bold text-slate-400 uppercase flex items-center gap-1"><Briefcase size={10} /> {s.role || 'Unspecified Role'}</span>
+                       <span className="text-[10px] font-bold text-slate-400 uppercase flex items-center gap-1"><Briefcase size={10} /> {s.role}</span>
                     </div>
                   </div>
                 </div>
+
                 <div className="space-y-3 relative z-10">
                    <div className="flex justify-between p-3 bg-slate-900/50 rounded-xl border border-white/5">
                       <span className="text-[10px] font-bold text-slate-500 uppercase">Base Salary</span>
                       <span className="text-sm font-bold text-white">${s.salary.toLocaleString()}</span>
                    </div>
                    <div className="flex justify-between p-3 bg-slate-900/50 rounded-xl border border-white/5">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase">Loan Debt</span>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase">Loan Balance</span>
                       <span className="text-sm font-bold text-rose-400">${s.loanBalance.toLocaleString()}</span>
                    </div>
+                   <div className="flex justify-between p-3 bg-slate-900/50 rounded-xl border border-white/5">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase">Leaves (This Cycle)</span>
+                      <span className="text-sm font-bold text-purple-400">{getLeaveCount(s.id)} Days</span>
+                   </div>
                 </div>
-                <div className="mt-6 pt-4 border-t border-white/5 flex gap-2 relative z-10">
-                   <button 
-                     onClick={() => setShowAdvanceModal(s)}
-                     className="flex-1 py-2.5 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 text-[10px] font-bold rounded-xl border border-purple-500/10 uppercase tracking-widest transition-all"
-                   >
-                     Issue Advance
-                   </button>
-                   <button onClick={() => deleteDoc(doc(db, getFullPath('staff'), s.id))} className="p-2 text-rose-400 hover:bg-rose-500/10 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity">
-                     <Trash2 size={16} />
-                   </button>
-                </div>
+
+                <button 
+                  onClick={() => deleteDoc(doc(db, getFullPath('staff'), s.id))} 
+                  className="absolute bottom-6 right-6 p-2 text-rose-400 hover:bg-rose-500/10 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity z-20"
+                  title="Delete Staff"
+                >
+                   <Trash2 size={16} />
+                </button>
               </div>
             ))}
           </div>
         </div>
       )}
 
+      {/* --- HOLIDAYS TAB --- */}
       {activeTab === 'holidays' && (
-        <div className="glass rounded-[2.5rem] p-8 border border-white/10 shadow-2xl">
-          <div className="flex items-center justify-between mb-8">
-            <h2 className="text-xl font-bold text-white">Holiday Planner</h2>
-            <div className="flex items-center gap-4 bg-slate-900/50 p-1 rounded-2xl border border-white/5">
-               <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))} className="p-2 hover:bg-white/5 rounded-xl text-slate-400"><ChevronLeft size={20} /></button>
-               <span className="text-sm font-bold text-white min-w-[120px] text-center">
-                 {currentMonth.toLocaleDateString([], { month: 'long', year: 'numeric' })}
-               </span>
-               <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))} className="p-2 hover:bg-white/5 rounded-xl text-slate-400"><ChevronRight size={20} /></button>
+        <div className="glass rounded-[2.5rem] p-8 border border-white/10 shadow-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-6 mb-8">
+            <div>
+              <h2 className="text-xl font-bold text-white">Holiday Planner</h2>
+              <p className="text-xs text-slate-400 mt-1">
+                 {selectedStaffForHoliday ? 'Click dates to mark leave.' : 'Select a staff member to edit schedule.'}
+              </p>
+            </div>
+            
+            <div className="flex items-center gap-4">
+               {/* Month Navigator */}
+               <div className="flex items-center gap-2 bg-slate-900/50 p-1 rounded-2xl border border-white/5">
+                  <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))} className="p-2 hover:bg-white/5 rounded-xl text-slate-400"><ChevronLeft size={20} /></button>
+                  <span className="text-sm font-bold text-white min-w-[120px] text-center">
+                    {currentMonth.toLocaleDateString([], { month: 'long', year: 'numeric' })}
+                  </span>
+                  <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))} className="p-2 hover:bg-white/5 rounded-xl text-slate-400"><ChevronRight size={20} /></button>
+               </div>
+               
+               {/* Staff Selector */}
+               <select 
+                  value={selectedStaffForHoliday}
+                  onChange={(e) => setSelectedStaffForHoliday(e.target.value)}
+                  className={`bg-slate-900 border rounded-2xl px-4 py-2.5 text-white text-sm font-bold outline-none focus:ring-2 focus:ring-purple-500/50 transition-all ${selectedStaffForHoliday ? 'border-purple-500/50 ring-1 ring-purple-500/30' : 'border-white/10'}`}
+               >
+                  <option value="">Overview Mode (Read Only)</option>
+                  {staff.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+               </select>
             </div>
           </div>
 
-          <div className="grid grid-cols-7 gap-4">
-             {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
-               <div key={d} className="text-center text-[10px] font-bold text-slate-500 uppercase tracking-widest">{d}</div>
-             ))}
-             {daysInMonth.map((date, idx) => {
-               if (!date) return <div key={`pad-${idx}`} />;
-               const dateStr = date.toISOString().split('T')[0];
-               const dayHolidays = holidays.filter(h => h.date === dateStr);
-               
-               return (
-                 <div key={dateStr} className="aspect-square glass rounded-2xl border border-white/5 p-2 flex flex-col gap-1 relative group hover:border-purple-500/30 transition-all cursor-default">
-                   <span className="text-xs font-bold text-slate-400 mb-1">{date.getDate()}</span>
-                   <div className="flex flex-wrap gap-1">
-                      {dayHolidays.map(h => {
-                        const s = staff.find(sm => sm.id === h.staffId);
-                        return (
-                          <div key={h.id} title={s?.name} className="w-2 h-2 rounded-full shadow-sm" style={{ backgroundColor: s?.color }} />
-                        );
-                      })}
-                   </div>
-                   
-                   <div className="absolute inset-0 bg-slate-900/90 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity flex flex-wrap items-center justify-center p-2 gap-1 z-20">
-                      {staff.map(s => {
-                        const active = dayHolidays.some(h => h.staffId === s.id);
-                        return (
-                          <button 
-                            key={s.id} 
-                            onClick={() => toggleHoliday(s.id, dateStr)}
-                            title={s.name}
-                            className={`w-6 h-6 rounded-lg flex items-center justify-center transition-all ${active ? 'shadow-lg scale-110' : 'bg-white/5 opacity-30 hover:opacity-100'}`}
-                            style={{ backgroundColor: active ? s.color : undefined }}
-                          >
-                            <Heart size={10} className="text-white" />
-                          </button>
-                        );
-                      })}
-                   </div>
+          <div className="mb-6 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Active Cycle:</span>
+                 <span className="text-xs font-bold text-purple-400">
+                    {periodRange.startDate.toLocaleDateString()} — {periodRange.endDate.toLocaleDateString()}
+                 </span>
+              </div>
+              {!selectedStaffForHoliday && (
+                 <div className="flex items-center gap-2 text-amber-400 bg-amber-500/10 px-3 py-1 rounded-lg border border-amber-500/10">
+                    <AlertCircle size={12} />
+                    <span className="text-[10px] font-bold uppercase">Overview Mode</span>
                  </div>
+              )}
+          </div>
+
+          <div className="grid grid-cols-7 gap-3">
+             {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+               <div key={d} className="text-center text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">{d}</div>
+             ))}
+             
+             {/* Empty slots for alignment */}
+             {Array.from({ length: daysInPeriod[0].getDay() }).map((_, i) => <div key={`pad-${i}`} />)}
+
+             {daysInPeriod.map((date) => {
+               const dateStr = date.toISOString().split('T')[0];
+               
+               const isSelectedStaffHoliday = selectedStaffForHoliday 
+                  ? holidays.some(h => h.staffId === selectedStaffForHoliday && h.date === dateStr)
+                  : false;
+
+               const allLeavesOnDay = holidays.filter(h => h.date === dateStr);
+
+               return (
+                 <button
+                   key={dateStr}
+                   onClick={() => selectedStaffForHoliday && toggleHoliday(selectedStaffForHoliday, dateStr)}
+                   disabled={!selectedStaffForHoliday}
+                   className={`
+                     aspect-square rounded-2xl border flex flex-col items-center justify-start pt-3 gap-1 transition-all relative overflow-hidden group
+                     ${isSelectedStaffHoliday 
+                        ? 'bg-rose-500/20 border-rose-500/50 text-rose-400' 
+                        : selectedStaffForHoliday 
+                           ? 'bg-white/5 border-white/5 hover:bg-white/10 text-slate-400 hover:text-white cursor-pointer'
+                           : 'bg-white/5 border-white/5 text-slate-500 cursor-default'
+                     }
+                   `}
+                 >
+                   <span className="text-sm font-bold z-10">{date.getDate()}</span>
+                   
+                   {/* Layout for the dots - BIGGER SIZE (w-2.5 h-2.5) */}
+                   <div className="flex flex-wrap items-center justify-center gap-1.5 px-2 mt-1">
+                      {allLeavesOnDay.map(h => {
+                         const s = staff.find(staff => staff.id === h.staffId);
+                         if (!s) return null;
+                         return (
+                           <div 
+                             key={h.id} 
+                             title={s.name}
+                             className={`w-2.5 h-2.5 rounded-full shadow-sm ${h.staffId === selectedStaffForHoliday ? 'ring-2 ring-white scale-110' : ''}`}
+                             style={{ backgroundColor: s.color }}
+                           />
+                         );
+                      })}
+                   </div>
+
+                   {isSelectedStaffHoliday && <div className="absolute inset-0 bg-rose-500/10 blur-xl" />}
+                 </button>
                );
              })}
           </div>
-          <div className="mt-8 flex gap-4 flex-wrap">
+
+          <div className="mt-6 flex flex-wrap gap-4 pt-4 border-t border-white/5">
              {staff.map(s => (
-               <div key={s.id} className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                 <div className="w-2 h-2 rounded-full" style={{ backgroundColor: s.color }} />
-                 {s.name}
-               </div>
+                <div key={s.id} className="flex items-center gap-2">
+                   <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: s.color }} />
+                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{s.name}</span>
+                </div>
              ))}
           </div>
         </div>
       )}
 
+      {/* --- PAYROLL TAB --- */}
       {activeTab === 'payroll' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
           <div className="lg:col-span-2 space-y-6">
-            <div className="glass rounded-[2.5rem] p-8 border border-white/10 shadow-xl space-y-8">
-              <h2 className="text-xl font-bold text-white flex items-center gap-2"><Banknote className="text-emerald-400" /> Advanced Payroll Engine</h2>
+            <div className="glass rounded-[2.5rem] p-8 border border-white/10 shadow-xl space-y-6">
+              <h2 className="text-xl font-bold text-white flex items-center gap-2"><Banknote className="text-emerald-400" /> Payroll & Advances</h2>
               <div className="space-y-4">
                 {staff.map(s => (
-                  <div key={s.id} className="flex items-center justify-between p-6 bg-slate-900/50 rounded-[1.5rem] border border-white/5 hover:border-purple-500/20 transition-all group">
+                  <div key={s.id} className="p-6 bg-slate-900/50 rounded-[1.5rem] border border-white/5 hover:border-purple-500/20 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-6">
                     <div className="flex items-center gap-4">
                        <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-white font-bold" style={{ backgroundColor: s.color }}>{s.name[0]}</div>
                        <div>
                          <p className="font-bold text-white">{s.name}</p>
-                         <p className="text-[10px] text-slate-500 uppercase tracking-widest">{s.role} • Base: ${s.salary}</p>
+                         <p className="text-[10px] text-slate-500 uppercase tracking-widest">{s.role}</p>
                        </div>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
+                       <button 
+                         onClick={() => setShowAdvanceModal(s)}
+                         className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-[10px] font-bold rounded-xl border border-white/10 uppercase tracking-widest transition-all flex items-center gap-2"
+                       >
+                         <Wallet size={12} className="text-amber-400" /> Advance
+                       </button>
+                       {/* NEW: Give Loan Button */}
+                       <button 
+                         onClick={() => setShowLoanModal(s)}
+                         className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-[10px] font-bold rounded-xl border border-white/10 uppercase tracking-widest transition-all flex items-center gap-2"
+                       >
+                         <CreditCard size={12} className="text-rose-400" /> Loan
+                       </button>
+                       
+                       <div className="w-px h-6 bg-white/10 mx-1" />
+
                        <button onClick={() => initiatePayroll(s.id, 'SALARY')} className="px-4 py-2 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 text-[10px] font-bold rounded-xl border border-purple-500/10 uppercase tracking-widest transition-all">Salary</button>
                        <button onClick={() => initiatePayroll(s.id, 'SERVICE_CHARGE')} className="px-4 py-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 text-[10px] font-bold rounded-xl border border-blue-500/10 uppercase tracking-widest transition-all">SC Share</button>
                     </div>
@@ -425,15 +567,11 @@ export const Staff: React.FC = () => {
               <ul className="space-y-4">
                 <li className="flex gap-3">
                    <div className="p-1.5 bg-white/5 rounded-lg text-slate-400 h-fit"><CheckCircle2 size={14} /></div>
-                   <p className="text-[10px] text-slate-400">Advances are automatically calculated and deducted.</p>
+                   <p className="text-[10px] text-slate-400">Issue advances anytime. They are deducted from the next payout.</p>
                 </li>
                 <li className="flex gap-3">
                    <div className="p-1.5 bg-white/5 rounded-lg text-slate-400 h-fit"><CheckCircle2 size={14} /></div>
-                   <p className="text-[10px] text-slate-400">Manual Loan repayment can be set for each payout.</p>
-                </li>
-                <li className="flex gap-3">
-                   <div className="p-1.5 bg-white/5 rounded-lg text-slate-400 h-fit"><CheckCircle2 size={14} /></div>
-                   <p className="text-[10px] text-slate-400">Selection of fund source (Cash vs Bank) is required.</p>
+                   <p className="text-[10px] text-slate-400">Loans increase the staff debt balance and are deducted manually.</p>
                 </li>
               </ul>
               <div className="p-4 bg-slate-900 rounded-2xl border border-white/5">
@@ -445,7 +583,9 @@ export const Staff: React.FC = () => {
         </div>
       )}
 
-      {/* Add Staff Modal */}
+      {/* --- MODALS --- */}
+      
+      {/* New Staff Modal */}
       {showAddStaff && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => !actionLoading && setShowAddStaff(false)} />
@@ -463,10 +603,7 @@ export const Staff: React.FC = () => {
                 <div className="space-y-2">
                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Financials</label>
                    <input name="salary" type="number" required className="w-full bg-slate-900 border border-white/5 rounded-2xl px-4 py-3 text-white outline-none focus:ring-2 focus:ring-purple-500/50" placeholder="Basic Monthly Salary" />
-                   <div className="grid grid-cols-2 gap-4">
-                     <input name="loanBalance" type="number" className="w-full bg-slate-900 border border-white/5 rounded-2xl px-4 py-3 text-white outline-none focus:ring-2 focus:ring-purple-500/50" placeholder="Initial Loan" />
-                     <input name="loanInstallment" type="number" className="w-full bg-slate-900 border border-white/5 rounded-2xl px-4 py-3 text-white outline-none focus:ring-2 focus:ring-purple-500/50" placeholder="Installment" />
-                   </div>
+                   <input name="loanBalance" type="number" className="w-full bg-slate-900 border border-white/5 rounded-2xl px-4 py-3 text-white outline-none focus:ring-2 focus:ring-purple-500/50" placeholder="Initial Loan Amount" />
                 </div>
                 <button disabled={actionLoading} type="submit" className="w-full py-5 gradient-purple rounded-3xl text-white font-bold shadow-xl shadow-purple-500/20 active:scale-95 transition-all flex items-center justify-center gap-3">
                   {actionLoading ? <Loader2 className="animate-spin" size={24} /> : <Save size={24} />} Save Member
@@ -485,13 +622,22 @@ export const Staff: React.FC = () => {
                <h2 className="text-2xl font-bold text-white">Issue Advance</h2>
                <button onClick={() => setShowAdvanceModal(null)} className="text-slate-500 hover:text-white" disabled={actionLoading}><X size={24} /></button>
              </div>
-             <div className="mb-6 p-4 bg-purple-500/10 rounded-2xl border border-purple-500/20 flex items-center gap-4">
-               <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white" style={{ backgroundColor: showAdvanceModal.color }}>{showAdvanceModal.name[0]}</div>
-               <div>
-                  <p className="font-bold text-white">{showAdvanceModal.name}</p>
-                  <p className="text-[10px] text-slate-400 uppercase">{showAdvanceModal.role}</p>
-               </div>
+             
+             {/* Pending Balance Info */}
+             <div className="mb-6 p-4 bg-slate-900/50 rounded-2xl border border-white/5 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                   <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold" style={{ backgroundColor: showAdvanceModal.color }}>{showAdvanceModal.name[0]}</div>
+                   <div>
+                      <p className="font-bold text-white">{showAdvanceModal.name}</p>
+                      <p className="text-[10px] text-slate-400 uppercase">{showAdvanceModal.role}</p>
+                   </div>
+                </div>
+                <div className="text-right">
+                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Pending</p>
+                   <p className="text-lg font-bold text-rose-400">${getOutstandingAdvances(showAdvanceModal.id).toLocaleString()}</p>
+                </div>
              </div>
+
              <form onSubmit={handleIssueAdvance} className="space-y-6">
                 <div className="space-y-2">
                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Advance Amount</label>
@@ -506,6 +652,54 @@ export const Staff: React.FC = () => {
                 </div>
                 <button disabled={actionLoading} type="submit" className="w-full py-5 gradient-purple rounded-3xl text-white font-bold shadow-xl shadow-purple-500/20 active:scale-95 transition-all flex items-center justify-center gap-3">
                   {actionLoading ? <Loader2 className="animate-spin" size={24} /> : <ArrowRight size={24} />} Confirm Advance
+                </button>
+             </form>
+          </div>
+        </div>
+      )}
+
+      {/* NEW: Give Loan Modal */}
+      {showLoanModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => !actionLoading && setShowLoanModal(null)} />
+          <div className="glass w-full max-w-md rounded-[2.5rem] p-8 md:p-10 shadow-2xl relative animate-in zoom-in-95 duration-200">
+             <div className="flex items-center justify-between mb-8">
+               <h2 className="text-2xl font-bold text-white flex items-center gap-2"><CreditCard size={28} className="text-rose-400" /> New Loan</h2>
+               <button onClick={() => setShowLoanModal(null)} className="text-slate-500 hover:text-white" disabled={actionLoading}><X size={24} /></button>
+             </div>
+             
+             <div className="mb-6 p-4 bg-rose-500/10 rounded-2xl border border-rose-500/20 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                   <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold" style={{ backgroundColor: showLoanModal.color }}>{showLoanModal.name[0]}</div>
+                   <div>
+                      <p className="font-bold text-white">{showLoanModal.name}</p>
+                      <p className="text-[10px] text-slate-400 uppercase">Current Loan</p>
+                   </div>
+                </div>
+                <div className="text-right">
+                   <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Balance</p>
+                   <p className="text-lg font-bold text-rose-400">${showLoanModal.loanBalance.toLocaleString()}</p>
+                </div>
+             </div>
+
+             <form onSubmit={handleGiveLoan} className="space-y-6">
+                <div className="space-y-2">
+                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Loan Amount</label>
+                   <input name="amount" type="number" required className="w-full bg-slate-900 border border-white/5 rounded-2xl px-4 py-4 text-3xl font-black text-white outline-none" placeholder="0.00" />
+                </div>
+                <div className="space-y-2">
+                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Source of Funds</label>
+                   <select name="source" required className="w-full bg-slate-900 border border-white/5 rounded-2xl px-4 py-3 text-white outline-none">
+                     <option value="till_float">Till Cash (${accounts.find(a => a.id === 'till_float')?.balance})</option>
+                     <option value="business_bank">Business Bank (${accounts.find(a => a.id === 'business_bank')?.balance})</option>
+                   </select>
+                </div>
+                <div className="space-y-2">
+                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Notes / Terms</label>
+                   <input name="notes" className="w-full bg-slate-900 border border-white/5 rounded-2xl px-4 py-3 text-white outline-none" placeholder="e.g. 6 month term" />
+                </div>
+                <button disabled={actionLoading} type="submit" className="w-full py-5 gradient-purple rounded-3xl text-white font-bold shadow-xl shadow-purple-500/20 active:scale-95 transition-all flex items-center justify-center gap-3">
+                  {actionLoading ? <Loader2 className="animate-spin" size={24} /> : <CreditCard size={24} />} Issue Loan
                 </button>
              </form>
           </div>

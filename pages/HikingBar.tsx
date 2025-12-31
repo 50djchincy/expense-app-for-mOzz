@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { useAccounts } from '../AccountsContext';
 import { useAuth } from '../AuthContext';
@@ -11,10 +10,8 @@ import {
   addDoc, 
   query, 
   where, 
-  orderBy,
-  writeBatch,
-  increment,
-  deleteDoc
+  // orderBy, // Sorting client-side to avoid composite index requirement
+  // limit,
 } from 'firebase/firestore';
 import { 
   Mountain, 
@@ -33,7 +30,8 @@ import {
   Wallet,
   SmartphoneNfc,
   Zap,
-  CupSoda
+  CupSoda,
+  History // Imported History Icon
 } from 'lucide-react';
 import { HikingBarTransaction } from '../types';
 
@@ -41,6 +39,7 @@ export const HikingBar: React.FC = () => {
   const { profile } = useAuth();
   const { accounts, transferFunds, loading: accountsLoading } = useAccounts();
   const [transactions, setTransactions] = useState<HikingBarTransaction[]>([]);
+  const [history, setHistory] = useState<HikingBarTransaction[]>([]); // New History State
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -57,15 +56,15 @@ export const HikingBar: React.FC = () => {
   const debtOwed = receivableAccount?.balance || 0;
 
   useEffect(() => {
-    // Note: Sorting handled client-side in the snapshot listener to avoid composite index requirement
-    const q = query(
+    // 1. Pending Transactions Listener
+    const qPending = query(
       collection(db, getFullPath('hiking_bar_txs')),
       where('status', '==', 'PENDING')
     );
 
-    const unsubscribe = onSnapshot(q, (snap) => {
+    const unsubPending = onSnapshot(qPending, (snap) => {
       const data = snap.docs.map(d => ({ ...d.data(), id: d.id } as HikingBarTransaction));
-      // Client-side sort
+      // Client-side sort for Pending (Oldest first or Newest first? Usually oldest to settle first, but keeping Newest for visibility)
       data.sort((a, b) => b.date - a.date);
       setTransactions(data);
       setLoading(false);
@@ -74,7 +73,23 @@ export const HikingBar: React.FC = () => {
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    // 2. History Transactions Listener
+    const qHistory = query(
+      collection(db, getFullPath('hiking_bar_txs')),
+      where('status', '==', 'RECONCILED')
+    );
+
+    const unsubHistory = onSnapshot(qHistory, (snap) => {
+      const data = snap.docs.map(d => ({ ...d.data(), id: d.id } as HikingBarTransaction));
+      // Client-side sort for History (Newest reconciled first)
+      data.sort((a, b) => (b.reconciledAt || 0) - (a.reconciledAt || 0));
+      setHistory(data);
+    });
+
+    return () => {
+      unsubPending();
+      unsubHistory();
+    };
   }, []);
 
   // Pre-calculate allocated total and difference for the settlement modal to avoid RHS arithmetic errors
@@ -155,7 +170,7 @@ export const HikingBar: React.FC = () => {
   if (loading || accountsLoading) return <div className="flex justify-center items-center py-20"><Loader2 className="animate-spin text-purple-400" size={40} /></div>;
 
   return (
-    <div className="space-y-8 animate-fade-in">
+    <div className="space-y-8 animate-fade-in pb-12">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-white flex items-center gap-3">
@@ -200,49 +215,118 @@ export const HikingBar: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
-        {/* Reconciliation List */}
-        <div className="lg:col-span-3 space-y-6">
-           <div className="flex items-center justify-between px-2">
-             <h2 className="text-xl font-bold text-white flex items-center gap-2">
-               <ArrowRightLeft className="text-purple-400" size={20} />
-               Reconciliation Queue
-             </h2>
-             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{transactions.length} Unsettled Entries</span>
+        {/* Left Column: Queues */}
+        <div className="lg:col-span-3 space-y-12">
+           
+           {/* 1. Pending Queue */}
+           <div className="space-y-6">
+             <div className="flex items-center justify-between px-2">
+               <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                 <ArrowRightLeft className="text-purple-400" size={20} />
+                 Reconciliation Queue
+               </h2>
+               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{transactions.length} Unsettled</span>
+             </div>
+
+             <div className="space-y-4">
+               {transactions.map(tx => (
+                 <div key={tx.id} className="glass rounded-[2rem] p-6 border border-white/10 hover:border-blue-500/30 transition-all group flex items-center justify-between">
+                    <div className="flex items-center gap-5">
+                       <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center border border-white/5">
+                          <Calendar size={20} className="text-slate-500" />
+                       </div>
+                       <div>
+                          <p className="text-sm font-bold text-white">{tx.description}</p>
+                          <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-widest">{new Date(tx.date).toLocaleDateString()}</p>
+                       </div>
+                    </div>
+                    <div className="flex items-center gap-8">
+                       <div className="text-right">
+                          <p className="text-xl font-black text-white">${tx.amount.toLocaleString()}</p>
+                          <p className="text-[10px] text-slate-500 uppercase mt-0.5">Amount Owed</p>
+                       </div>
+                       <button 
+                          onClick={() => setSettleTx(tx)}
+                          className="p-3 bg-blue-500 hover:bg-blue-600 rounded-xl text-white shadow-lg shadow-blue-500/20 active:scale-95 transition-all"
+                       >
+                          <ChevronRight size={20} />
+                       </button>
+                    </div>
+                 </div>
+               ))}
+               {transactions.length === 0 && (
+                 <div className="p-12 text-center glass rounded-[2rem] border border-white/10 border-dashed">
+                    <Dices className="text-slate-600 mx-auto mb-4" size={40} />
+                    <p className="text-slate-500 italic">No pending Hiking Bar transactions to reconcile.</p>
+                 </div>
+               )}
+             </div>
            </div>
 
-           <div className="space-y-4">
-             {transactions.map(tx => (
-               <div key={tx.id} className="glass rounded-[2rem] p-6 border border-white/10 hover:border-blue-500/30 transition-all group flex items-center justify-between">
-                  <div className="flex items-center gap-5">
-                     <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center border border-white/5">
-                        <Calendar size={20} className="text-slate-500" />
-                     </div>
-                     <div>
-                        <p className="text-sm font-bold text-white">{tx.description}</p>
-                        <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-widest">{new Date(tx.date).toLocaleDateString()}</p>
-                     </div>
-                  </div>
-                  <div className="flex items-center gap-8">
-                     <div className="text-right">
-                        <p className="text-xl font-black text-white">${tx.amount.toLocaleString()}</p>
-                        <p className="text-[10px] text-slate-500 uppercase mt-0.5">Amount Owed</p>
-                     </div>
-                     <button 
-                        onClick={() => setSettleTx(tx)}
-                        className="p-3 bg-blue-500 hover:bg-blue-600 rounded-xl text-white shadow-lg shadow-blue-500/20 active:scale-95 transition-all"
-                     >
-                        <ChevronRight size={20} />
-                     </button>
-                  </div>
-               </div>
-             ))}
-             {transactions.length === 0 && (
-               <div className="p-12 text-center glass rounded-[2rem] border border-white/10 border-dashed">
-                  <Dices className="text-slate-600 mx-auto mb-4" size={40} />
-                  <p className="text-slate-500 italic">No pending Hiking Bar transactions to reconcile.</p>
-               </div>
-             )}
+           {/* 2. Settlement History */}
+           <div className="space-y-6">
+              <div className="flex items-center justify-between px-2">
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  <History className="text-slate-400" size={20} />
+                  Settlement History
+                </h2>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Past Records</span>
+              </div>
+              
+              <div className="space-y-4">
+                {history.map(tx => (
+                   <div key={tx.id} className="glass rounded-[2rem] p-6 border border-white/5 bg-slate-900/30 flex flex-col md:flex-row md:items-center justify-between gap-6 opacity-80 hover:opacity-100 transition-all">
+                      <div className="flex items-center gap-5">
+                         <div className="w-10 h-10 rounded-2xl bg-slate-800/50 flex items-center justify-center border border-white/5">
+                            <CheckCircle2 size={16} className="text-emerald-500" />
+                         </div>
+                         <div>
+                            <p className="text-sm font-bold text-slate-300 line-through decoration-slate-600">{tx.description}</p>
+                            <p className="text-[10px] text-slate-500 mt-1 uppercase tracking-widest">
+                               Reconciled: {tx.reconciledAt ? new Date(tx.reconciledAt).toLocaleDateString() : 'N/A'}
+                            </p>
+                         </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-6">
+                         {/* Breakdown Badges */}
+                         <div className="flex gap-2 flex-wrap justify-end">
+                            {tx.settlementData?.cash > 0 && (
+                               <span className="px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-bold text-emerald-400">
+                                  Cash: ${tx.settlementData.cash}
+                               </span>
+                            )}
+                            {tx.settlementData?.card > 0 && (
+                               <span className="px-2 py-1 rounded-lg bg-blue-500/10 border border-blue-500/20 text-[10px] font-bold text-blue-400">
+                                  Card: ${tx.settlementData.card}
+                               </span>
+                            )}
+                            {tx.settlementData?.serviceCharge > 0 && (
+                               <span className="px-2 py-1 rounded-lg bg-rose-500/10 border border-rose-500/20 text-[10px] font-bold text-rose-400">
+                                  Fee: ${tx.settlementData.serviceCharge}
+                               </span>
+                            )}
+                            {tx.settlementData?.contra > 0 && (
+                               <span className="px-2 py-1 rounded-lg bg-purple-500/10 border border-purple-500/20 text-[10px] font-bold text-purple-400">
+                                  Contra: ${tx.settlementData.contra}
+                               </span>
+                            )}
+                         </div>
+                         <div className="text-right min-w-[80px]">
+                            <p className="text-lg font-black text-slate-400">${tx.amount.toLocaleString()}</p>
+                         </div>
+                      </div>
+                   </div>
+                ))}
+                
+                {history.length === 0 && (
+                   <div className="p-8 text-center text-slate-600 text-sm italic">
+                      No historical settlements found.
+                   </div>
+                )}
+              </div>
            </div>
+
         </div>
 
         {/* Info Column */}
