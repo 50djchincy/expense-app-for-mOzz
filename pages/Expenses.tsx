@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAccounts } from '../AccountsContext';
-import { useAuth } from '../AuthContext';
 import { db, getFullPath } from '../firebase';
 import { 
   collection, 
@@ -26,7 +25,7 @@ import {
 import { Transaction, ExpenseTemplate, RecurringExpense, Contact } from '../types';
 
 export const Expenses: React.FC = () => {
-  const { accounts, transferFunds, transactions } = useAccounts();
+  const { accounts, transferFunds, transactions, updateEntity, isSandbox } = useAccounts();
   
   // Tabs
   const [activeTab, setActiveTab] = useState<'log' | 'recent' | 'pending' | 'recurring'>('log');
@@ -37,6 +36,19 @@ export const Expenses: React.FC = () => {
   const [recurring, setRecurring] = useState<RecurringExpense[]>([]);
   const [templates, setTemplates] = useState<ExpenseTemplate[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
+
+  const getSandboxData = <T,>(key: string, fallback: T): T => {
+    const stored = localStorage.getItem(`mozz_sb_${key}`);
+    return stored ? JSON.parse(stored) : fallback;
+  };
+
+  const setSandboxData = (key: string, data: any) => {
+    localStorage.setItem(`mozz_sb_${key}`, JSON.stringify(data));
+  };
+
+  const SANDBOX_TEMPLATES_KEY = 'expense_templates';
+  const SANDBOX_RECURRING_KEY = 'recurring_expenses';
+  const SANDBOX_CONTACTS_KEY = 'contacts';
 
   // Helper for DateTime Input (Returns YYYY-MM-DDTHH:mm for local time)
   const getCurrentDateTime = () => {
@@ -92,6 +104,14 @@ export const Expenses: React.FC = () => {
   [recurring]);
 
   useEffect(() => {
+    if (isSandbox) {
+      setTemplates(getSandboxData<ExpenseTemplate[]>(SANDBOX_TEMPLATES_KEY, []));
+      setRecurring(getSandboxData<RecurringExpense[]>(SANDBOX_RECURRING_KEY, []));
+      setContacts(getSandboxData<Contact[]>(SANDBOX_CONTACTS_KEY, []));
+      setLoading(false);
+      return;
+    }
+
     let active = true;
 
     const unsubTemplates = onSnapshot(collection(db, getFullPath('expense_templates')), (snap) => {
@@ -115,7 +135,7 @@ export const Expenses: React.FC = () => {
       unsubRecurring();
       unsubContacts();
     };
-  }, []);
+  }, [isSandbox]);
 
   // Reset Date if Till Float is selected (Enforce "Now")
   useEffect(() => {
@@ -174,28 +194,60 @@ export const Expenses: React.FC = () => {
 
       // 4. Save Template
       if (form.saveAsTemplate) {
-        await addDoc(collection(db, getFullPath('expense_templates')), {
-          name: description,
-          amount: amountNum,
-          category: form.category,
-          fromAccountId: form.fromAccountId,
-          description: description
-        });
+        if (isSandbox) {
+          const newTemplate: ExpenseTemplate = {
+            id: `template_sb_${Date.now()}`,
+            name: description,
+            amount: amountNum,
+            category: form.category,
+            fromAccountId: form.fromAccountId,
+            description: description
+          };
+          const nextTemplates = [newTemplate, ...templates];
+          setTemplates(nextTemplates);
+          setSandboxData(SANDBOX_TEMPLATES_KEY, nextTemplates);
+        } else {
+          await addDoc(collection(db, getFullPath('expense_templates')), {
+            name: description,
+            amount: amountNum,
+            category: form.category,
+            fromAccountId: form.fromAccountId,
+            description: description
+          });
+        }
       }
 
       // 5. Create Recurring Reminder
       if (form.isRecurring) {
-        await addDoc(collection(db, getFullPath('recurring_expenses')), {
-          name: description,
-          amount: amountNum,
-          frequency: form.frequency,
-          fromAccountId: form.fromAccountId,
-          category: form.category,
-          description: description,
-          contactId: form.contactId || null,
-          isActive: true,
-          nextDueDate: Date.now() + (30 * 24 * 60 * 60 * 1000)
-        });
+        if (isSandbox) {
+          const newRecurring: RecurringExpense = {
+            id: `recurring_sb_${Date.now()}`,
+            name: description,
+            amount: amountNum,
+            frequency: form.frequency,
+            fromAccountId: form.fromAccountId,
+            category: form.category,
+            description: description,
+            contactId: form.contactId || null,
+            isActive: true,
+            nextDueDate: Date.now() + (30 * 24 * 60 * 60 * 1000)
+          };
+          const nextRecurring = [newRecurring, ...recurring];
+          setRecurring(nextRecurring);
+          setSandboxData(SANDBOX_RECURRING_KEY, nextRecurring);
+        } else {
+          await addDoc(collection(db, getFullPath('recurring_expenses')), {
+            name: description,
+            amount: amountNum,
+            frequency: form.frequency,
+            fromAccountId: form.fromAccountId,
+            category: form.category,
+            description: description,
+            contactId: form.contactId || null,
+            isActive: true,
+            nextDueDate: Date.now() + (30 * 24 * 60 * 60 * 1000)
+          });
+        }
       }
 
       // 6. Stock Trigger
@@ -248,9 +300,18 @@ export const Expenses: React.FC = () => {
       if (processRecurringModal.frequency === 'WEEKLY') nextDate.setDate(nextDate.getDate() + 7);
       if (processRecurringModal.frequency === 'DAILY') nextDate.setDate(nextDate.getDate() + 1);
       
-      await updateDoc(doc(db, getFullPath('recurring_expenses'), processRecurringModal.id), {
-        nextDueDate: nextDate.getTime()
-      });
+      if (isSandbox) {
+        const updatedRecurring = recurring.map(item => {
+          if (item.id !== processRecurringModal.id) return item;
+          return { ...item, nextDueDate: nextDate.getTime() };
+        });
+        setRecurring(updatedRecurring);
+        setSandboxData(SANDBOX_RECURRING_KEY, updatedRecurring);
+      } else {
+        await updateDoc(doc(db, getFullPath('recurring_expenses'), processRecurringModal.id), {
+          nextDueDate: nextDate.getTime()
+        });
+      }
 
       setProcessRecurringModal(null);
       alert("Recurring payment processed!");
@@ -279,7 +340,7 @@ export const Expenses: React.FC = () => {
           `Settlement: ${bill.description}`,
           'Debt Settlement'
         );
-        await updateDoc(doc(db, getFullPath('transactions'), bill.id), { isSettled: true });
+        await updateEntity('transactions', bill.id, { isSettled: true });
       }
       setSettleContactId(null);
       alert("All bills for this contact settled!");
@@ -302,7 +363,25 @@ export const Expenses: React.FC = () => {
 
   const deleteTemplate = async (id: string) => {
     if (confirm("Delete this template?")) {
-      await deleteDoc(doc(db, getFullPath('expense_templates'), id));
+      if (isSandbox) {
+        const nextTemplates = templates.filter(t => t.id !== id);
+        setTemplates(nextTemplates);
+        setSandboxData(SANDBOX_TEMPLATES_KEY, nextTemplates);
+      } else {
+        await deleteDoc(doc(db, getFullPath('expense_templates'), id));
+      }
+    }
+  };
+
+  const deleteRecurring = async (id: string) => {
+    if (confirm("Delete this recurring bill?")) {
+      if (isSandbox) {
+        const nextRecurring = recurring.filter(r => r.id !== id);
+        setRecurring(nextRecurring);
+        setSandboxData(SANDBOX_RECURRING_KEY, nextRecurring);
+      } else {
+        await deleteDoc(doc(db, getFullPath('recurring_expenses'), id));
+      }
     }
   };
 
@@ -629,7 +708,7 @@ export const Expenses: React.FC = () => {
                          <button onClick={() => setProcessRecurringModal(rec)} className="flex-1 py-3 bg-purple-500 hover:bg-purple-600 text-white text-xs font-bold rounded-xl transition-all shadow-lg shadow-purple-500/20">
                             Process Payment
                          </button>
-                         <button onClick={() => deleteDoc(doc(db, getFullPath('recurring_expenses'), rec.id))} className="p-3 bg-slate-800 hover:bg-rose-500/20 hover:text-rose-400 text-slate-500 rounded-xl transition-all"><Trash2 size={16}/></button>
+                        <button onClick={() => deleteRecurring(rec.id)} className="p-3 bg-slate-800 hover:bg-rose-500/20 hover:text-rose-400 text-slate-500 rounded-xl transition-all"><Trash2 size={16}/></button>
                       </div>
                     </div>
                   );

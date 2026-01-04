@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { collection, query, onSnapshot, doc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
 import { initializeApp, deleteApp, getApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
-import { db, getFullPath, auth } from '../firebase';
+import { db, getFullPath } from '../firebase';
 import { UserProfile, UserRole } from '../types';
 import { 
   Users, 
@@ -33,7 +33,7 @@ const firebaseConfig = {
 };
 
 export const AdminUsers: React.FC = () => {
-  const { profile } = useAuth();
+  const { profile, isSandbox } = useAuth();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -55,6 +55,16 @@ export const AdminUsers: React.FC = () => {
   const [search, setSearch] = useState('');
 
   useEffect(() => {
+    if (isSandbox) {
+      const stored = localStorage.getItem('mozz_sb_users');
+      const sandboxUsers = stored
+        ? (JSON.parse(stored) as UserProfile[])
+        : (profile ? [profile] : []);
+      setUsers(sandboxUsers);
+      setLoading(false);
+      return;
+    }
+
     const q = query(collection(db, getFullPath('users')));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const fetched = snapshot.docs.map(d => ({ ...d.data() } as UserProfile));
@@ -62,15 +72,31 @@ export const AdminUsers: React.FC = () => {
       setLoading(false);
     });
     return () => unsubscribe();
-  }, []);
+  }, [isSandbox, profile]);
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setCreating(true);
     setCreateError('');
-    
+
     let secondaryApp;
     try {
+      if (isSandbox) {
+        const newUser: UserProfile = {
+          uid: `sandbox_user_${Date.now()}`,
+          email: createForm.email,
+          displayName: createForm.displayName,
+          role: createForm.role,
+          createdAt: Date.now()
+        };
+        const nextUsers = [newUser, ...users];
+        setUsers(nextUsers);
+        localStorage.setItem('mozz_sb_users', JSON.stringify(nextUsers));
+        setCreateForm({ displayName: '', email: '', password: '', role: 'STAFF' });
+        setIsModalOpen(false);
+        return;
+      }
+
       // 1. Initialize a secondary app to create the user without logging out the admin
       const appName = `SecondaryApp_${Date.now()}`;
       secondaryApp = initializeApp(firebaseConfig, appName);
@@ -119,6 +145,17 @@ export const AdminUsers: React.FC = () => {
 
   const handleSaveEdit = async (uid: string) => {
     try {
+      if (isSandbox) {
+        const nextUsers = users.map(user => {
+          if (user.uid !== uid) return user;
+          return { ...user, role: editForm.role, displayName: editForm.displayName };
+        });
+        setUsers(nextUsers);
+        localStorage.setItem('mozz_sb_users', JSON.stringify(nextUsers));
+        setEditingId(null);
+        return;
+      }
+
       const userRef = doc(db, getFullPath('users'), uid);
       await updateDoc(userRef, { 
         role: editForm.role,
@@ -136,6 +173,12 @@ export const AdminUsers: React.FC = () => {
         return;
     }
     if (confirm("Are you sure you want to delete this user? They will lose access immediately.")) {
+      if (isSandbox) {
+        const nextUsers = users.filter(user => user.uid !== uid);
+        setUsers(nextUsers);
+        localStorage.setItem('mozz_sb_users', JSON.stringify(nextUsers));
+        return;
+      }
       await deleteDoc(doc(db, getFullPath('users'), uid));
     }
   };

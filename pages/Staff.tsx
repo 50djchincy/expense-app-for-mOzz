@@ -53,7 +53,7 @@ interface PayrollConfig {
 }
 
 export const Staff: React.FC = () => {
-  const { profile } = useAuth();
+  const { profile, isSandbox } = useAuth();
   const { accounts, transferFunds, transactions } = useAccounts();
   const [activeTab, setActiveTab] = useState<'directory' | 'holidays' | 'payroll'>('directory');
   const [loading, setLoading] = useState(true);
@@ -71,7 +71,26 @@ export const Staff: React.FC = () => {
   const [showLoanModal, setShowLoanModal] = useState<StaffMember | null>(null); // Added Loan Modal State
   const [payrollConfig, setPayrollConfig] = useState<PayrollConfig | null>(null);
 
+  const getSandboxData = <T,>(key: string, fallback: T): T => {
+    const stored = localStorage.getItem(`mozz_sb_${key}`);
+    return stored ? JSON.parse(stored) : fallback;
+  };
+
+  const setSandboxData = (key: string, data: any) => {
+    localStorage.setItem(`mozz_sb_${key}`, JSON.stringify(data));
+  };
+
+  const SANDBOX_STAFF_KEY = 'staff';
+  const SANDBOX_HOLIDAYS_KEY = 'holidays';
+
   useEffect(() => {
+    if (isSandbox) {
+      setStaff(getSandboxData<StaffMember[]>(SANDBOX_STAFF_KEY, []));
+      setHolidays(getSandboxData<HolidayRecord[]>(SANDBOX_HOLIDAYS_KEY, []));
+      setLoading(false);
+      return;
+    }
+
     const unsubStaff = onSnapshot(collection(db, getFullPath('staff')), (snap) => {
       setStaff(snap.docs.map(d => ({ ...d.data(), id: d.id } as StaffMember)));
       setLoading(false);
@@ -85,7 +104,7 @@ export const Staff: React.FC = () => {
       unsubStaff();
       unsubHolidays();
     };
-  }, []);
+  }, [isSandbox]);
 
   // --- Date Range Logic (15th to 14th) ---
   const periodRange = useMemo(() => {
@@ -141,17 +160,25 @@ export const Staff: React.FC = () => {
     setActionLoading(true);
     try {
       const id = `staff_${Date.now()}`;
-      await setDoc(doc(db, getFullPath('staff'), id), {
+      const newStaff: StaffMember = {
         id,
-        name: formData.get('name'),
-        role: formData.get('role'),
+        name: String(formData.get('name')),
+        role: String(formData.get('role')),
         salary: Number(formData.get('salary')),
         loanBalance: Number(formData.get('loanBalance')) || 0,
         loanInstallment: 0,
         color: COLORS[staff.length % COLORS.length],
         isActive: true,
         joinedAt: Date.now()
-      });
+      };
+
+      if (isSandbox) {
+        const nextStaff = [newStaff, ...staff];
+        setStaff(nextStaff);
+        setSandboxData(SANDBOX_STAFF_KEY, nextStaff);
+      } else {
+        await setDoc(doc(db, getFullPath('staff'), id), newStaff);
+      }
       setShowAddStaff(false);
     } catch (err: any) {
       alert(err.message);
@@ -213,9 +240,18 @@ export const Staff: React.FC = () => {
       );
 
       // 2. Update the Staff Member's loanBalance field
-      await updateDoc(doc(db, getFullPath('staff'), showLoanModal.id), {
-        loanBalance: increment(amount)
-      });
+      if (isSandbox) {
+        const nextStaff = staff.map(member => {
+          if (member.id !== showLoanModal.id) return member;
+          return { ...member, loanBalance: (member.loanBalance || 0) + amount };
+        });
+        setStaff(nextStaff);
+        setSandboxData(SANDBOX_STAFF_KEY, nextStaff);
+      } else {
+        await updateDoc(doc(db, getFullPath('staff'), showLoanModal.id), {
+          loanBalance: increment(amount)
+        });
+      }
 
       setShowLoanModal(null);
       alert("Loan issued successfully.");
@@ -232,12 +268,29 @@ export const Staff: React.FC = () => {
     const existing = holidays.find(h => h.staffId === staffId && h.date === dateStr);
     try {
       if (existing) {
-        await deleteDoc(doc(db, getFullPath('holidays'), existing.id));
+        if (isSandbox) {
+          const nextHolidays = holidays.filter(h => h.id !== existing.id);
+          setHolidays(nextHolidays);
+          setSandboxData(SANDBOX_HOLIDAYS_KEY, nextHolidays);
+        } else {
+          await deleteDoc(doc(db, getFullPath('holidays'), existing.id));
+        }
       } else {
-        await addDoc(collection(db, getFullPath('holidays')), {
+        const newHoliday: HolidayRecord = {
+          id: `holiday_${Date.now()}`,
           staffId,
           date: dateStr
-        });
+        };
+        if (isSandbox) {
+          const nextHolidays = [newHoliday, ...holidays];
+          setHolidays(nextHolidays);
+          setSandboxData(SANDBOX_HOLIDAYS_KEY, nextHolidays);
+        } else {
+          await addDoc(collection(db, getFullPath('holidays')), {
+            staffId,
+            date: dateStr
+          });
+        }
       }
     } catch (err: any) {
       alert(err.message);
@@ -337,9 +390,18 @@ export const Staff: React.FC = () => {
           'Staff Loan Repayment',
           { staffId: s.id }
         );
-        await updateDoc(doc(db, getFullPath('staff'), s.id), {
-          loanBalance: Math.max(0, s.loanBalance - loanRepayment)
-        });
+        if (isSandbox) {
+          const nextStaff = staff.map(member => {
+            if (member.id !== s.id) return member;
+            return { ...member, loanBalance: Math.max(0, (member.loanBalance || 0) - loanRepayment) };
+          });
+          setStaff(nextStaff);
+          setSandboxData(SANDBOX_STAFF_KEY, nextStaff);
+        } else {
+          await updateDoc(doc(db, getFullPath('staff'), s.id), {
+            loanBalance: Math.max(0, s.loanBalance - loanRepayment)
+          });
+        }
       }
 
       alert(`Payroll processed for ${s.name}.`);
@@ -413,7 +475,15 @@ export const Staff: React.FC = () => {
                 </div>
 
                 <button 
-                  onClick={() => deleteDoc(doc(db, getFullPath('staff'), s.id))} 
+                  onClick={async () => {
+                    if (isSandbox) {
+                      const nextStaff = staff.filter(member => member.id !== s.id);
+                      setStaff(nextStaff);
+                      setSandboxData(SANDBOX_STAFF_KEY, nextStaff);
+                      return;
+                    }
+                    await deleteDoc(doc(db, getFullPath('staff'), s.id));
+                  }} 
                   className="absolute bottom-6 right-6 p-2 text-rose-400 hover:bg-rose-500/10 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity z-20"
                   title="Delete Staff"
                 >

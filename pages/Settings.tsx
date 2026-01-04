@@ -17,8 +17,10 @@ import {
   Store 
 } from 'lucide-react';
 import { Customer, Contact } from '../types';
+import { useAuth } from '../AuthContext';
 
 export const Settings: React.FC = () => {
+  const { isSandbox } = useAuth();
   const [activeSubTab, setActiveSubTab] = useState<'customers' | 'contacts'>('customers');
   
   // Data State
@@ -32,7 +34,26 @@ export const Settings: React.FC = () => {
   const [actionLoading, setActionLoading] = useState(false);
   const [search, setSearch] = useState('');
 
+  const getSandboxData = <T,>(key: string, fallback: T): T => {
+    const stored = localStorage.getItem(`mozz_sb_${key}`);
+    return stored ? JSON.parse(stored) : fallback;
+  };
+
+  const setSandboxData = (key: string, data: any) => {
+    localStorage.setItem(`mozz_sb_${key}`, JSON.stringify(data));
+  };
+
+  const SANDBOX_CUSTOMERS_KEY = 'customers';
+  const SANDBOX_CONTACTS_KEY = 'contacts';
+
   useEffect(() => {
+    if (isSandbox) {
+      setCustomers(getSandboxData<Customer[]>(SANDBOX_CUSTOMERS_KEY, []));
+      setContacts(getSandboxData<Contact[]>(SANDBOX_CONTACTS_KEY, []));
+      setLoading(false);
+      return;
+    }
+
     // 1. Fetch Customers
     const qCust = query(collection(db, getFullPath('customers')), orderBy('createdAt', 'desc'));
     const unsubCust = onSnapshot(qCust, (snap) => {
@@ -50,7 +71,7 @@ export const Settings: React.FC = () => {
       unsubCust();
       unsubCont();
     };
-  }, []);
+  }, [isSandbox]);
 
   const handleAddCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,14 +79,21 @@ export const Settings: React.FC = () => {
     setActionLoading(true);
     try {
       const id = `cust_${Date.now()}`;
-      await setDoc(doc(db, getFullPath('customers'), id), {
+      const newCustomer: Customer = {
         id,
-        name: formData.get('name'),
-        phone: formData.get('phone'),
-        email: formData.get('email'),
+        name: String(formData.get('name')),
+        phone: String(formData.get('phone') || ''),
+        email: String(formData.get('email') || ''),
         totalDebt: 0,
         createdAt: Date.now()
-      });
+      };
+      if (isSandbox) {
+        const nextCustomers = [newCustomer, ...customers];
+        setCustomers(nextCustomers);
+        setSandboxData(SANDBOX_CUSTOMERS_KEY, nextCustomers);
+      } else {
+        await setDoc(doc(db, getFullPath('customers'), id), newCustomer);
+      }
       setShowAddCustomer(false);
     } catch (err: any) {
       alert(err.message);
@@ -80,14 +108,21 @@ export const Settings: React.FC = () => {
     setActionLoading(true);
     try {
       const id = `contact_${Date.now()}`;
-      await setDoc(doc(db, getFullPath('contacts'), id), {
+      const newContact: Contact = {
         id,
-        name: formData.get('name'),
-        type: formData.get('type'),
-        phone: formData.get('phone'),
-        defaultCategory: formData.get('defaultCategory'),
-        notes: formData.get('notes')
-      });
+        name: String(formData.get('name')),
+        type: String(formData.get('type')),
+        phone: String(formData.get('phone') || ''),
+        defaultCategory: String(formData.get('defaultCategory') || ''),
+        notes: String(formData.get('notes') || '')
+      };
+      if (isSandbox) {
+        const nextContacts = [newContact, ...contacts];
+        setContacts(nextContacts);
+        setSandboxData(SANDBOX_CONTACTS_KEY, nextContacts);
+      } else {
+        await setDoc(doc(db, getFullPath('contacts'), id), newContact);
+      }
       setShowAddContact(false);
     } catch (err: any) {
       alert(err.message);
@@ -172,7 +207,15 @@ export const Settings: React.FC = () => {
                     ${c.totalDebt.toLocaleString()}
                   </span>
                 </div>
-                <button onClick={() => deleteDoc(doc(db, getFullPath('customers'), c.id))} className="absolute top-4 right-4 p-2 text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={async () => {
+                  if (isSandbox) {
+                    const nextCustomers = customers.filter(customer => customer.id !== c.id);
+                    setCustomers(nextCustomers);
+                    setSandboxData(SANDBOX_CUSTOMERS_KEY, nextCustomers);
+                    return;
+                  }
+                  await deleteDoc(doc(db, getFullPath('customers'), c.id));
+                }} className="absolute top-4 right-4 p-2 text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity">
                   <Trash2 size={16} />
                 </button>
               </div>
@@ -222,7 +265,15 @@ export const Settings: React.FC = () => {
                   )}
                   {c.notes && <p className="text-xs text-slate-500 italic">"{c.notes}"</p>}
                 </div>
-                <button onClick={() => deleteDoc(doc(db, getFullPath('contacts'), c.id))} className="absolute top-4 right-4 p-2 text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={async () => {
+                  if (isSandbox) {
+                    const nextContacts = contacts.filter(contact => contact.id !== c.id);
+                    setContacts(nextContacts);
+                    setSandboxData(SANDBOX_CONTACTS_KEY, nextContacts);
+                    return;
+                  }
+                  await deleteDoc(doc(db, getFullPath('contacts'), c.id));
+                }} className="absolute top-4 right-4 p-2 text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity">
                   <Trash2 size={16} />
                 </button>
               </div>

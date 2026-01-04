@@ -52,12 +52,25 @@ const CURRENCY_DENOMINATIONS = [
 ];
 
 export const DailyOps: React.FC = () => {
-  const { profile } = useAuth();
-  const { accounts, transferFunds, loading: accountsLoading } = useAccounts();
+  const { profile, isSandbox } = useAuth();
+  const { accounts, transferFunds, loading: accountsLoading, transactions } = useAccounts();
   const [currentShift, setCurrentShift] = useState<Shift | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [shiftExpenses, setShiftExpenses] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const getSandboxData = <T,>(key: string, fallback: T): T => {
+    const stored = localStorage.getItem(`mozz_sb_${key}`);
+    return stored ? JSON.parse(stored) : fallback;
+  };
+
+  const setSandboxData = (key: string, data: any) => {
+    localStorage.setItem(`mozz_sb_${key}`, JSON.stringify(data));
+  };
+
+  const SANDBOX_SHIFTS_KEY = 'shifts';
+  const SANDBOX_CUSTOMERS_KEY = 'customers';
+  const SANDBOX_HIKING_BAR_TXS_KEY = 'hiking_bar_txs';
   
   // UI States
   const [showDenomCalc, setShowDenomCalc] = useState(false);
@@ -83,6 +96,18 @@ export const DailyOps: React.FC = () => {
   const [denoms, setDenoms] = useState<Record<number, number>>({});
 
   useEffect(() => {
+    if (isSandbox) {
+      const shifts = getSandboxData<Shift[]>(SANDBOX_SHIFTS_KEY, []);
+      const latestShift = shifts.reduce<Shift | null>((latest, shift) => {
+        if (!latest) return shift;
+        return shift.openedAt > latest.openedAt ? shift : latest;
+      }, null);
+      setCurrentShift(latestShift);
+      setCustomers(getSandboxData<Customer[]>(SANDBOX_CUSTOMERS_KEY, []));
+      setLoading(false);
+      return;
+    }
+
     const q = query(
       collection(db, getFullPath('shifts')),
       orderBy('openedAt', 'desc'),
@@ -107,11 +132,21 @@ export const DailyOps: React.FC = () => {
       unsubShift();
       unsubCustomers();
     };
-  }, []);
+  }, [isSandbox]);
 
   // Sync Shift Expenses
   useEffect(() => {
     if (currentShift && currentShift.status === 'OPEN') {
+      if (isSandbox) {
+        const filtered = transactions.filter(tx => 
+          (tx.category === 'Operations' || tx.category === 'Transfer' || tx.category === 'Capital') && 
+          tx.fromAccountId === 'till_float' &&
+          tx.date >= currentShift.openedAt
+        );
+        setShiftExpenses(filtered);
+        return;
+      }
+
       const q = query(
         collection(db, getFullPath('transactions')),
         where('fromAccountId', '==', 'till_float')
@@ -128,7 +163,9 @@ export const DailyOps: React.FC = () => {
       });
       return () => unsub();
     }
-  }, [currentShift]);
+
+    setShiftExpenses([]);
+  }, [currentShift, isSandbox, transactions]);
 
   const totalTillExpenses = useMemo(() => 
     shiftExpenses.reduce((sum, e) => sum + e.amount, 0), 
@@ -157,6 +194,21 @@ export const DailyOps: React.FC = () => {
     try {
       const tillFloatAcc = accounts.find(a => a.id === 'till_float');
       const openingFloat = tillFloatAcc?.balance || 0;
+
+      if (isSandbox) {
+        const newShift: Shift = {
+          id: `shift_sb_${Date.now()}`,
+          status: 'OPEN',
+          openedAt: Date.now(),
+          openedBy: profile?.displayName || 'Unknown',
+          openingFloat: openingFloat
+        };
+        const shifts = getSandboxData<Shift[]>(SANDBOX_SHIFTS_KEY, []);
+        shifts.unshift(newShift);
+        setSandboxData(SANDBOX_SHIFTS_KEY, shifts);
+        setCurrentShift(newShift);
+        return;
+      }
 
       await addDoc(collection(db, getFullPath('shifts')), {
         status: 'OPEN',
@@ -254,13 +306,20 @@ export const DailyOps: React.FC = () => {
       // 3. Hiking Bar -> Partner Receivable
       if (hikingBarSalesVal > 0) {
         const hbtxId = `hbtx_${Date.now()}`;
-        await setDoc(doc(db, getFullPath('hiking_bar_txs'), hbtxId), {
+        const hbTx = {
           id: hbtxId,
           date: Date.now(),
           amount: hikingBarSalesVal,
           description: `Partner Sales: ${new Date().toLocaleDateString()}`,
           status: 'PENDING'
-        });
+        };
+        if (isSandbox) {
+          const hbTxs = getSandboxData<any[]>(SANDBOX_HIKING_BAR_TXS_KEY, []);
+          hbTxs.unshift(hbTx);
+          setSandboxData(SANDBOX_HIKING_BAR_TXS_KEY, hbTxs);
+        } else {
+          await setDoc(doc(db, getFullPath('hiking_bar_txs'), hbtxId), hbTx);
+        }
         await transferFunds(revenueSource, 'hiking_bar_rec', hikingBarSalesVal, 'Partner Receivable Generation', 'Partner Revenue');
       }
 
@@ -303,22 +362,49 @@ export const DailyOps: React.FC = () => {
       }
 
       // 7. Update Shift
-      await updateDoc(doc(db, getFullPath('shifts'), currentShift.id), {
-        status: 'CLOSED',
-        closedAt: Date.now(),
-        closedBy: profile?.displayName || 'Unknown',
-        totalSales: totalSalesVal,
-        cardPayments: cardPaymentsVal,
-        creditBills: creditBillsVal,
-        creditBillCustomerId: closeForm.creditBillCustomerId,
-        hikingBarSales: hikingBarSalesVal,
-        foreignCurrencyAmount: foreignCurrencyVal,
-        foreignCurrencyNotes: closeForm.foreignCurrencyNotes,
-        expectedCash: expectedCashValue,
-        actualCash: actualCashValue,
-        variance: varianceValue,
-        notes: closeForm.notes
-      });
+      if (isSandbox) {
+        const shifts = getSandboxData<Shift[]>(SANDBOX_SHIFTS_KEY, []);
+        const updatedShifts = shifts.map(shift => {
+          if (shift.id !== currentShift.id) return shift;
+          return {
+            ...shift,
+            status: 'CLOSED',
+            closedAt: Date.now(),
+            closedBy: profile?.displayName || 'Unknown',
+            totalSales: totalSalesVal,
+            cardPayments: cardPaymentsVal,
+            creditBills: creditBillsVal,
+            creditBillCustomerId: closeForm.creditBillCustomerId,
+            hikingBarSales: hikingBarSalesVal,
+            foreignCurrencyAmount: foreignCurrencyVal,
+            foreignCurrencyNotes: closeForm.foreignCurrencyNotes,
+            expectedCash: expectedCashValue,
+            actualCash: actualCashValue,
+            variance: varianceValue,
+            notes: closeForm.notes
+          };
+        });
+        setSandboxData(SANDBOX_SHIFTS_KEY, updatedShifts);
+        const latestShift = updatedShifts.find(shift => shift.id === currentShift.id) || null;
+        setCurrentShift(latestShift);
+      } else {
+        await updateDoc(doc(db, getFullPath('shifts'), currentShift.id), {
+          status: 'CLOSED',
+          closedAt: Date.now(),
+          closedBy: profile?.displayName || 'Unknown',
+          totalSales: totalSalesVal,
+          cardPayments: cardPaymentsVal,
+          creditBills: creditBillsVal,
+          creditBillCustomerId: closeForm.creditBillCustomerId,
+          hikingBarSales: hikingBarSalesVal,
+          foreignCurrencyAmount: foreignCurrencyVal,
+          foreignCurrencyNotes: closeForm.foreignCurrencyNotes,
+          expectedCash: expectedCashValue,
+          actualCash: actualCashValue,
+          variance: varianceValue,
+          notes: closeForm.notes
+        });
+      }
 
       setCloseForm({
         totalSales: 0,
