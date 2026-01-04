@@ -59,6 +59,14 @@ export const MoneyLab: React.FC = () => {
   const [currentShift, setCurrentShift] = useState<Shift | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
 
+  const getSandboxData = <T,>(key: string, fallback: T): T => {
+    const stored = localStorage.getItem(`mozz_sb_${key}`);
+    return stored ? JSON.parse(stored) : fallback;
+  };
+
+  const SANDBOX_SHIFTS_KEY = 'shifts';
+  const SANDBOX_CUSTOMERS_KEY = 'customers';
+
   // Card Reconciliation State
   const [reconAccount, setReconAccount] = useState<'mozzarella_card_payment' | 'hiking_bar_card_payment'>('mozzarella_card_payment');
   const [selectedTxIds, setSelectedTxIds] = useState<Set<string>>(new Set());
@@ -70,6 +78,17 @@ export const MoneyLab: React.FC = () => {
   const [debtSettleSource, setDebtSettleSource] = useState<string>('business_bank');
 
   useEffect(() => {
+    if (isSandbox) {
+      const shifts = getSandboxData<Shift[]>(SANDBOX_SHIFTS_KEY, []);
+      const latestShift = shifts.reduce<Shift | null>((latest, shift) => {
+        if (!latest) return shift;
+        return shift.openedAt > latest.openedAt ? shift : latest;
+      }, null);
+      setCurrentShift(latestShift);
+      setCustomers(getSandboxData<Customer[]>(SANDBOX_CUSTOMERS_KEY, []));
+      return;
+    }
+
     const q = query(
       collection(db, getFullPath('shifts')),
       orderBy('openedAt', 'desc'),
@@ -86,7 +105,7 @@ export const MoneyLab: React.FC = () => {
     });
 
     return () => { unsub(); unsubCust(); };
-  }, []);
+  }, [isSandbox]);
 
   // Filter pending transactions for card recon
   const pendingTxs = useMemo(() => {
